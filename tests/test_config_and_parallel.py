@@ -67,6 +67,23 @@ def test_maybe_auto_learn_processes_all_hashes(monkeypatch) -> None:
     assert msg == "Auto-added pHash to allowlist (allow.txt)"
 
 
+def test_maybe_auto_learn_master_switch_off_ignores_legacy_flags(monkeypatch) -> None:
+    monkeypatch.setenv("PHASH_AUTO_LEARN_ENABLE", "0")
+    monkeypatch.setenv("PHASH_AUTO_ALLOW_APPEND", "1")
+    monkeypatch.setenv("PHASH_AUTO_APPEND", "1")
+    monkeypatch.setattr("modimg.pipeline.frame_phash_hex_int", lambda fr: (f"h{fr.idx}", 1))
+
+    def fail_append(*args, **kwargs):
+        raise AssertionError("append_phash_to_allowlist should not be called when master switch is off")
+
+    monkeypatch.setattr("modimg.pipeline.append_phash_to_allowlist", fail_append)
+
+    frames = [Frame(idx=0, pil=Image.new("RGB", (2, 2)))]
+    verdict = Verdict(VerdictLabel.OK, 0.0, 0.0, 0.0, [])
+
+    assert maybe_auto_learn(verdict, frames) is None
+
+
 def test_cli_json_serializes_enum_values(tmp_path) -> None:
     img_path = tmp_path / "sample.png"
     out_path = tmp_path / "report.json"
@@ -77,6 +94,8 @@ def test_cli_json_serializes_enum_values(tmp_path) -> None:
         check=False,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
     )
     assert proc.returncode in (0, 2)
     data = json.loads(out_path.read_text(encoding="utf-8"))

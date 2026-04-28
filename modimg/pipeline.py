@@ -96,8 +96,12 @@ def maybe_auto_learn(verdict: Verdict, frames: List[Frame]) -> Optional[str]:
     try:
         if not frames:
             return None
-        auto_learn = os.getenv("PHASH_AUTO_LEARN_ENABLE", "0").strip() == "1"
-        if not auto_learn:
+        auto_learn_raw = os.getenv("PHASH_AUTO_LEARN_ENABLE")
+        auto_learn_is_set = auto_learn_raw is not None
+        auto_learn = (auto_learn_raw or "0").strip() == "1"
+        if auto_learn_is_set and not auto_learn:
+            return None
+        if not auto_learn_is_set:
             legacy_any = os.getenv("PHASH_AUTO_APPEND", "0").strip() == "1" or os.getenv("PHASH_AUTO_ALLOW_APPEND", "0").strip() == "1"
             if not legacy_any:
                 return None

@@ -12,6 +12,7 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..types import Engine, EngineResult, Frame
+from ..config import project_root
 from ..utils import now_ms, safe_model_dump
 
 
@@ -33,7 +34,7 @@ class OpenAIModerationEngine(Engine):
     _GLOBAL_LAST_CALL_MONO: float = 0.0
 
     # Simple on-disk cache to avoid re-calling OpenAI for the same bytes
-    _CACHE_LOCK = threading.Lock()
+    _CACHE_LOCK = threading.RLock()
     _CACHE: Optional[Dict[str, Any]] = None
     _CACHE_PATH: Optional[str] = None
     _CACHE_DIR_READY: bool = False
@@ -84,13 +85,13 @@ class OpenAIModerationEngine(Engine):
         return os.getenv("OPENAI_CACHE_ENABLE", "1").strip() == "1"
 
     def _cache_path(self) -> str:
-        # Resolve relative path next to script for predictable behavior
+        # Resolve relative path from project root for predictable behavior.
         if OpenAIModerationEngine._CACHE_PATH:
             return OpenAIModerationEngine._CACHE_PATH
         raw = os.getenv("OPENAI_CACHE_PATH", ".cache/openai_moderation_cache.json")
         raw = raw.strip() or ".cache/openai_moderation_cache.json"
         if not os.path.isabs(raw):
-            raw = os.path.join(self._script_dir(), raw)
+            raw = os.path.join(project_root(), raw)
         OpenAIModerationEngine._CACHE_PATH = raw
         return raw
 
@@ -441,4 +442,3 @@ class OpenAIModerationEngine(Engine):
 
         except Exception as e:
             return EngineResult(name=self.name, status="error", error=str(e), took_ms=now_ms() - start)
-
