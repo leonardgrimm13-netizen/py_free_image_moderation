@@ -31,3 +31,20 @@ def test_missing_optional_libs_are_skipped(monkeypatch) -> None:
 
     for result in by_name.values():
         assert result.status != "error"
+
+
+def test_opennsfw2_disable_flag_short_circuits_backend_import(monkeypatch) -> None:
+    from modimg.engines.opennsfw2_engine import OpenNSFW2Engine
+
+    engine = OpenNSFW2Engine()
+
+    def should_not_run():
+        raise AssertionError("backend import should not be attempted when disabled")
+
+    monkeypatch.setenv("OPENNSFW2_DISABLE", "1")
+    monkeypatch.setattr(engine, "_import_backend", should_not_run)
+
+    ok, reason = engine.available()
+
+    assert ok is False
+    assert reason == "disabled via OPENNSFW2_DISABLE=1"

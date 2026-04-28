@@ -33,7 +33,7 @@ class OpenNSFW2Engine(Engine):
         return OpenNSFW2Engine._BACKEND
 
     def available(self) -> Tuple[bool, str]:
-        if (os.getenv("OPENNSFW2_DISABLE", "0") or "0").strip() == "1":
+        if os.getenv("OPENNSFW2_DISABLE", "0").strip() == "1":
             return False, "disabled via OPENNSFW2_DISABLE=1"
         try:
             self._import_backend()
