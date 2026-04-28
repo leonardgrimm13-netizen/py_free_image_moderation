@@ -68,7 +68,7 @@ source .venv/bin/activate
 
 ### 2) Installationsoptionen
 
-#### A) Offline/Local
+#### A) Offline/Lokal
 ```bash
 pip install --upgrade pip
 pip install -r requirements.txt
@@ -101,7 +101,7 @@ pip install -r requirements_dev.txt
 
 Enthält z. B. `pytest` für lokale Testläufe.
 
-### 5) Optionale System-Abhängigkeit für OCR
+### 4) Optionale System-Abhängigkeit für OCR
 Für OCR wird in der Regel eine lokale Tesseract-Installation benötigt:
 - Ubuntu/Debian: `sudo apt install tesseract-ocr`
 - macOS (Homebrew): `brew install tesseract`
@@ -151,14 +151,14 @@ python moderate_image.py ./images --recursive --json moderation_report.json
 python -m compileall -q .
 pytest -q
 python moderate_image.py --help
-python moderate_image.py --no-apis
+python moderate_image.py pfad/zum/test.png --no-apis
 ```
 
 Erwartetes Verhalten (kurz):
 - `python -m compileall -q .` → Exitcode `0` bei syntaktisch gültigem Code.
 - `pytest -q` → Exitcode `0` bei erfolgreichen Tests, sonst ungleich `0`.
 - `python moderate_image.py --help` → Exitcode `0` und Anzeige der CLI-Hilfe.
-- `python moderate_image.py --no-apis` → Exitcode `0` (nur `OK`) oder `2` (mindestens ein `REVIEW/BLOCK`).
+- `python moderate_image.py pfad/zum/test.png --no-apis` → Exitcode `0`, wenn die Eingabe `OK` ist, oder `2`, wenn sie `REVIEW`/`BLOCK` ergibt.
 
 Optionale Engines dürfen fehlen; sie müssen in der Ausgabe sauber als `skipped`/`disabled` erscheinen, statt die Ausführung abzubrechen.
 
@@ -193,7 +193,8 @@ Nützliche Schalter:
 - `PHASH_ALLOW_DISABLE=1` oder `PHASH_BLOCK_DISABLE=1` zum gezielten Abschalten
 - `SCORE_VERBOSE=1` für ausführlichere Engine-Scores
 - `MODIMG_LOG_LEVEL=DEBUG|INFO|WARNING|ERROR` für die zentrale Protokollierung
-- `MODIMG_PARALLEL_ENGINES=1` unabhängige engines gleichzeitig ausführen
+- `MODIMG_PARALLEL_ENGINES=1` unabhängige Engines gleichzeitig ausführen
+- `NO_CHECKS_POLICY=review` steuert den Fallback, wenn keine Engine lief: `ok` = erlauben, `review` = sicherer Standard, `block` = strengster Modus
 
 ---
 
