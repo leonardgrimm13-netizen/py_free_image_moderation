@@ -74,13 +74,6 @@ class OpenAIModerationEngine(Engine):
         except Exception as e:
             return False, f"missing dependency (pip install openai): {e}"
 
-    @staticmethod
-    def _script_dir() -> str:
-        try:
-            return os.path.dirname(os.path.abspath(__file__))
-        except Exception:
-            return os.getcwd()
-
     def _cache_enabled(self) -> bool:
         return os.getenv("OPENAI_CACHE_ENABLE", "1").strip() == "1"
 

@@ -151,14 +151,14 @@ python moderate_image.py ./images --recursive --json moderation_report.json
 python -m compileall -q .
 pytest -q
 python moderate_image.py --help
-python moderate_image.py --no-apis
+python moderate_image.py path/to/test.png --no-apis
 ```
 
 Expected behavior (short):
 - `python -m compileall -q .` → exit code `0` if code is syntactically valid.
 - `pytest -q` → exit code `0` if tests pass, otherwise non-zero.
 - `python moderate_image.py --help` → exit code `0` and shows CLI help.
-- `python moderate_image.py --no-apis` → exit code `0` (only `OK`) or `2` (at least one `REVIEW/BLOCK`).
+- `python moderate_image.py path/to/test.png --no-apis` → exit code `0` (only `OK`) oder `2` (mindestens ein `REVIEW/BLOCK`) für die angegebene Eingabedatei.
 
 Optional engines may be missing; they must show up as `skipped`/`disabled` in output instead of aborting execution.
 
@@ -194,6 +194,7 @@ Useful toggles:
 - `SCORE_VERBOSE=1` for more verbose engine scores
 - `MODIMG_LOG_LEVEL=DEBUG|INFO|WARNING|ERROR` for centralized logging
 - `MODIMG_PARALLEL_ENGINES=1` to run independent engines concurrently (optional/experimentell; default bleibt aus)
+- `NO_CHECKS_POLICY=review` steuert den Fallback, wenn keine Engine lief: `ok` = erlauben, `review` = sicherer Standard, `block` = strengster Modus
 
 ---
 
