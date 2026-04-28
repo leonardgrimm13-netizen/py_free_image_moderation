@@ -96,7 +96,7 @@ Includes everything from `requirements.txt` plus API clients:
 
 ### 3) Dev/Test dependencies
 ```bash
-pip install -r requirements-dev.txt
+pip install -r requirements_dev.txt
 ```
 
 Includes e.g. `pytest` for local test runs.
