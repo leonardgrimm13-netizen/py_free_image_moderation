@@ -10,7 +10,10 @@ readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "py_free_image_moderation maintainers" }]
 license = { text = "Proprietary" }
-dependencies = []
+dependencies = [
+  "Pillow>=10.0.0",
+  "numpy>=1.26.0",
+]
 
 [project.optional-dependencies]
 api = ["openai", "requests"]

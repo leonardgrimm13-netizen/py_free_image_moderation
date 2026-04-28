@@ -118,8 +118,19 @@ def main(argv: List[str] | None = None) -> int:
     if not args.input:
         ap.error("input is required (path/dir/url)")
 
+    inputs = _iter_paths(args.input, args.recursive)
+    if not inputs:
+        message = "No input images found."
+        LOGGER.error("%s", message)
+        if args.json_out:
+            Path(args.json_out).write_text(
+                json.dumps({"error": message, "results": []}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        return 2
+
     reports: List[Dict[str, Any]] = []
-    for p in _iter_paths(args.input, args.recursive):
+    for p in inputs:
         rep = run_on_input(p, no_apis=args.no_apis, sample_frames=args.sample_frames)
         _print_report(rep)
         reports.append(
