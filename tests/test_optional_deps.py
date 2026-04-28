@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import builtins
+from PIL import Image
 from modimg.pipeline import build_main_engines, run_engines
+from modimg.engines.yolo_weapons import YOLOWorldWeaponsEngine
+from modimg.types import Frame
 
 
 MISSING = {"nudenet", "opennsfw2", "open_nsfw2", "ultralytics", "pytesseract"}
@@ -48,3 +51,20 @@ def test_opennsfw2_disable_flag_short_circuits_backend_import(monkeypatch) -> No
 
     assert ok is False
     assert reason == "disabled via OPENNSFW2_DISABLE=1"
+
+
+def test_yolo_skips_when_default_model_path_missing(monkeypatch, tmp_path) -> None:
+    engine = YOLOWorldWeaponsEngine()
+    monkeypatch.setenv("YOLO_WORLD_MODEL", "")
+    monkeypatch.setenv("YOLO_WEAPON_MODEL", "")
+    monkeypatch.setenv("YOLO_WEAPONS_WEIGHTS", "")
+    monkeypatch.setattr(engine, "available", lambda: (True, "ok"))
+    monkeypatch.setattr("modimg.engines.yolo_weapons.project_root", lambda: str(tmp_path))
+
+    frame = Frame(idx=0, pil=Image.new("RGB", (2, 2)))
+    result = engine.run(path="dummy.png", frames=[frame])
+
+    assert result.status == "skipped"
+    assert result.error is not None
+    assert "missing default YOLO model path:" in result.error
+    assert "yolov8s-oiv7.pt" in result.error
