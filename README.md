@@ -1,7 +1,7 @@
 # py_free_image_moderation
 A flexible Python project for **image and GIF moderation** with multiple engines (local + API), pHash lists, and clear CLI output.
 
-**Languages:** **English** | [Deutsch](README.de.md)
+**Languages:** **English** | [German](README.de.md)
 
 ## Contents
 - [Features](#features)
@@ -101,7 +101,7 @@ pip install -r requirements_dev.txt
 
 Includes e.g. `pytest` for local test runs.
 
-### 5) Optional system dependency for OCR
+### 4) Optional system dependency for OCR
 For OCR you typically need a local Tesseract install:
 - Ubuntu/Debian: `sudo apt install tesseract-ocr`
 - macOS (Homebrew): `brew install tesseract`
@@ -193,8 +193,8 @@ Useful toggles:
 - `PHASH_ALLOW_DISABLE=1` or `PHASH_BLOCK_DISABLE=1` to disable them selectively
 - `SCORE_VERBOSE=1` for more verbose engine scores
 - `MODIMG_LOG_LEVEL=DEBUG|INFO|WARNING|ERROR` for centralized logging
-- `MODIMG_PARALLEL_ENGINES=1` to run independent engines concurrently (optional/experimentell; default bleibt aus)
-- `NO_CHECKS_POLICY=review` steuert den Fallback, wenn keine Engine lief: `ok` = erlauben, `review` = sicherer Standard, `block` = strengster Modus
+- `MODIMG_PARALLEL_ENGINES=1` to run independent engines concurrently (optional/experimental; disabled by default)
+- `NO_CHECKS_POLICY=review` controls the fallback when no engine ran: `ok` = allow, `review` = safer default, `block` = strictest mode
 
 ---
 
