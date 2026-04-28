@@ -16,6 +16,8 @@ def test_offline_no_apis_with_generated_image(tmp_path: Path) -> None:
         check=False,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
     )
 
     combined = f"{proc.stdout}\n{proc.stderr}"
