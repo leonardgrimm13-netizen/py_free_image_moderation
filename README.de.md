@@ -193,7 +193,7 @@ Nützliche Schalter:
 - `PHASH_ALLOW_DISABLE=1` oder `PHASH_BLOCK_DISABLE=1` zum gezielten Abschalten
 - `SCORE_VERBOSE=1` für ausführlichere Engine-Scores
 - `MODIMG_LOG_LEVEL=DEBUG|INFO|WARNING|ERROR` für die zentrale Protokollierung
-- `MODIMG_PARALLEL_ENGINES=1` unabhängige Engines gleichzeitig ausführen
+- `MODIMG_PARALLEL_ENGINES=1` unabhängige Engines gleichzeitig ausführen (optional/experimentell; standardmäßig deaktiviert)
 - `NO_CHECKS_POLICY=review` steuert den Fallback, wenn keine Engine lief: `ok` = erlauben, `review` = sicherer Standard, `block` = strengster Modus
 
 ---
