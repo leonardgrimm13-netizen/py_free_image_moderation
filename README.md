@@ -192,6 +192,8 @@ Useful toggles:
 - `OPENAI_DISABLE=1` / omit `SIGHTENGINE_*` if you don’t use API engines
 - `PHASH_ALLOW_DISABLE=1` or `PHASH_BLOCK_DISABLE=1` to disable them selectively
 - `SCORE_VERBOSE=1` for more verbose engine scores
+- `MODIMG_LOG_LEVEL=DEBUG|INFO|WARNING|ERROR` for centralized logging
+- `MODIMG_PARALLEL_ENGINES=1` to run independent engines concurrently
 
 ---
 
