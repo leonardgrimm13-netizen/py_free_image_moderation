@@ -10,8 +10,6 @@ def test_python_m_modimg_help() -> None:
         check=False,
         capture_output=True,
         text=True,
-        encoding="utf-8",
-        errors="replace",
     )
 
     assert proc.returncode == 0
