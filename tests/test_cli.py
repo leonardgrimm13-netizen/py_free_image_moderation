@@ -64,3 +64,18 @@ def test_cli_with_invalid_verdict_threshold_env_does_not_crash(tmp_path) -> None
     combined = f"{proc.stdout}\n{proc.stderr}"
     assert proc.returncode in (0, 2)
     assert "Traceback (most recent call last)" not in combined
+
+
+def test_cli_empty_directory_returns_exit_code_2_without_traceback(tmp_path) -> None:
+    proc = subprocess.run(
+        [sys.executable, "moderate_image.py", str(tmp_path), "--recursive", "--no-apis"],
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+
+    combined = f"{proc.stdout}\n{proc.stderr}"
+    assert proc.returncode == 2
+    assert "Traceback (most recent call last)" not in combined

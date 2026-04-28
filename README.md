@@ -158,7 +158,7 @@ Expected behavior (short):
 - `python -m compileall -q .` → exit code `0` if code is syntactically valid.
 - `pytest -q` → exit code `0` if tests pass, otherwise non-zero.
 - `python moderate_image.py --help` → exit code `0` and shows CLI help.
-- `python moderate_image.py path/to/test.png --no-apis` → exit code `0` (only `OK`) oder `2` (mindestens ein `REVIEW/BLOCK`) für die angegebene Eingabedatei.
+- `python moderate_image.py path/to/test.png --no-apis` → exit code `0` if the input is `OK`, or `2` if it returns `REVIEW`/`BLOCK`.
 
 Optional engines may be missing; they must show up as `skipped`/`disabled` in output instead of aborting execution.
 
