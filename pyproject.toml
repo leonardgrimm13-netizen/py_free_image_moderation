@@ -4,13 +4,18 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "py-free-immage-moderation"
-version = "0.1.0"
+version = "0.1.1"
 description = "Flexible image/GIF moderation pipeline with optional local and API engines"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "py_free_immage_moderation maintainers" }]
 license = { text = "Proprietary" }
 dependencies = []
+
+[project.optional-dependencies]
+api = ["openai", "requests"]
+vision = ["opennsfw2", "nudenet", "ultralytics", "pytesseract"]
+dev = ["pytest", "pytest-cov"]
 
 [project.scripts]
 moderate-image = "modimg.cli:main"

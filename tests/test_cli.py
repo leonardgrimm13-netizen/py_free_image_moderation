@@ -11,6 +11,8 @@ def test_cli_help() -> None:
         check=False,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
     )
 
     assert proc.returncode == 0
@@ -32,6 +34,8 @@ def test_cli_help_with_invalid_sample_frames_env_does_not_crash() -> None:
         check=False,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         env=env,
     )
 
@@ -52,6 +56,8 @@ def test_cli_with_invalid_verdict_threshold_env_does_not_crash(tmp_path) -> None
         check=False,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         env=env,
     )
 

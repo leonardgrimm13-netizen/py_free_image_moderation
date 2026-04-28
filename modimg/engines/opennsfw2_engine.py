@@ -4,8 +4,9 @@ import os
 from typing import Any, List, Tuple, Optional
 from PIL import Image
 
+from ..enums import EngineStatus
 from ..types import Engine, EngineResult
-from ..utils import now_ms
+from ..utils import env_bool, now_ms
 
 class OpenNSFW2Engine(Engine):
     """Offline NSFW probability via OpenNSFW2.
@@ -33,7 +34,7 @@ class OpenNSFW2Engine(Engine):
         return OpenNSFW2Engine._BACKEND
 
     def available(self) -> Tuple[bool, str]:
-        if os.getenv("OPENNSFW2_DISABLE", "0").strip() == "1":
+        if env_bool("OPENNSFW2_DISABLE", False):
             return False, "disabled via OPENNSFW2_DISABLE=1"
         try:
             self._import_backend()
@@ -64,7 +65,7 @@ class OpenNSFW2Engine(Engine):
         except Exception as e:
             return EngineResult(
                 name=self.name,
-                status="error",
+                status=EngineStatus.ERROR,
                 error=f"{backend_name} prediction failed: {type(e).__name__}: {e}",
                 took_ms=now_ms() - start,
             )
@@ -72,7 +73,7 @@ class OpenNSFW2Engine(Engine):
         if prob is None:
             return EngineResult(
                 name=self.name,
-                status="error",
+                status=EngineStatus.ERROR,
                 error=f"{backend_name} installed but no compatible predict_* function found",
                 took_ms=now_ms() - start,
             )
@@ -82,4 +83,4 @@ class OpenNSFW2Engine(Engine):
         except Exception:
             p = 0.0
         p = float(max(0.0, min(1.0, p)))
-        return EngineResult(name=self.name, status="ok", scores={"nsfw_probability": p}, took_ms=now_ms() - start)
+        return EngineResult(name=self.name, status=EngineStatus.OK, scores={"nsfw_probability": p}, took_ms=now_ms() - start)

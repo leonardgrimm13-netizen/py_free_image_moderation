@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 from typing import List, Optional
 
+from .config import get_config
+from .enums import EngineStatus, VerdictLabel
 from .types import EngineResult, Verdict
 from .utils import safe_float01
 
@@ -22,6 +24,12 @@ def _safe_float(value: object, default: float = 0.0) -> float:
         return float(value)
     except Exception:
         return float(default)
+
+
+def _status_lower(status: EngineStatus | str) -> str:
+    if isinstance(status, EngineStatus):
+        return status.value.lower()
+    return str(status).lower()
 
 
 def compute_verdict(results: List[EngineResult]) -> Verdict:
@@ -67,7 +75,7 @@ def compute_verdict(results: List[EngineResult]) -> Verdict:
             "Sightengine",
         }
 
-    err_all = [r for r in results if (r.status or "").lower() == "error"]
+    err_all = [r for r in results if _status_lower(r.status) == EngineStatus.ERROR.value]
     err_core = [r for r in err_all if (not core_set) or (r.name in core_set)]
 
     if err_core:
@@ -80,7 +88,7 @@ def compute_verdict(results: List[EngineResult]) -> Verdict:
         elif policy in ("strict", "hard"):
             policy = "review"
         if policy in ("block", "not_ok", "fail", "fail_closed", "deny"):
-            return Verdict("BLOCK", max(nudity, 0.5), max(violence, 0.5), max(hate, 0.5), reasons)
+            return Verdict(VerdictLabel.BLOCK, max(nudity, 0.5), max(violence, 0.5), max(hate, 0.5), reasons)
         if policy in ("ignore", "open", "allow"):
             # proceed without forcing REVIEW/BLOCK
             pass
@@ -97,10 +105,10 @@ def compute_verdict(results: List[EngineResult]) -> Verdict:
     # If nothing produced scores (all checks were skipped/disabled), treat as OK by default.
     # This avoids false NOT_OK verdicts when the user hasn't installed optional dependencies
     # or has no API keys configured.
-    if not any((r.status or "").lower() == "ok" for r in results):
+    if not any(_status_lower(r.status) == EngineStatus.OK.value for r in results):
         if not reasons:
             reasons.append("No checks ran (all engines skipped/disabled).")
-        return Verdict("OK", nudity, violence, hate, reasons)
+        return Verdict(VerdictLabel.OK, nudity, violence, hate, reasons)
 
 
     # Helpers
@@ -112,7 +120,7 @@ def compute_verdict(results: List[EngineResult]) -> Verdict:
 
     # Aggregate
     for r in results:
-        if r.status != "ok":
+        if _status_lower(r.status) != EngineStatus.OK.value:
             continue
         s = r.scores or {}
         if r.name == "pHash allowlist":
@@ -127,7 +135,7 @@ def compute_verdict(results: List[EngineResult]) -> Verdict:
                 except Exception:
                     lbl = None
                 reasons.append("pHash allowlist match" + (f" ({lbl})" if lbl else ""))
-                return Verdict("OK", 0.0, 0.0, 0.0, reasons)
+                return Verdict(VerdictLabel.OK, 0.0, 0.0, 0.0, reasons)
 
         if r.name == "pHash blocklist":
             match = sf(s.get("phash_block_match", 0.0))
@@ -138,7 +146,7 @@ def compute_verdict(results: List[EngineResult]) -> Verdict:
                 except Exception:
                     lbl = None
                 reasons.append("pHash blocklist match" + (f" ({lbl})" if lbl else ""))
-                return Verdict("BLOCK", 1.0, 1.0, 1.0, reasons)
+                return Verdict(VerdictLabel.BLOCK, 1.0, 1.0, 1.0, reasons)
 
         n = 0.0
         v = 0.0
@@ -151,7 +159,7 @@ def compute_verdict(results: List[EngineResult]) -> Verdict:
                 flagged = 0.0
             if flagged >= 1.0:
                 reasons.append("OCR text blocked")
-                return Verdict("BLOCK", 1.0, 1.0, 1.0, reasons)
+                return Verdict(VerdictLabel.BLOCK, 1.0, 1.0, 1.0, reasons)
 
         if r.name == "OpenNSFW2":
             n = sf(s.get("nsfw_probability", 0.0))
@@ -277,23 +285,23 @@ def compute_verdict(results: List[EngineResult]) -> Verdict:
 
             if minors > 0.01:
                 reasons.append("OpenAI: sexual/minors detected")
-                return Verdict("BLOCK", 1.0, 1.0, 1.0, reasons)
+                return Verdict(VerdictLabel.BLOCK, 1.0, 1.0, 1.0, reasons)
 
             nudity = bump(nudity, sexual, f"OpenAI sexual={sexual:.2f}", 0.50)
             violence = bump(violence, v, f"OpenAI violence={v:.2f}", 0.50)
             hate = bump(hate, h, f"OpenAI hate={h:.2f}", 0.50)
 
     # Final decision thresholds (configurable via .env)
-    block_t = _env_float("FINAL_BLOCK_THRESHOLD", 0.85)
+    block_t = get_config().final_block_threshold
     review_t = _env_float("FINAL_REVIEW_THRESHOLD", 0.40)
-    label = "OK"
+    label = VerdictLabel.OK
     if nudity >= block_t or violence >= block_t or hate >= block_t:
-        label = "BLOCK"
+        label = VerdictLabel.BLOCK
     elif nudity >= review_t or violence >= review_t or hate >= review_t:
-        label = "REVIEW"
+        label = VerdictLabel.REVIEW
 
     # Ensure at least one reason for REVIEW/BLOCK
-    if label != "OK" and not reasons:
+    if label != VerdictLabel.OK and not reasons:
         reasons.append("Borderline content detected by one or more engines.")
 
     return Verdict(label, nudity, violence, hate, reasons)
@@ -337,4 +345,3 @@ def pick_folder_dialog() -> Optional[str]:
         return None
     except Exception:
         return None
-
