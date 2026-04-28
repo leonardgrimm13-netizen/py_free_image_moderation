@@ -116,13 +116,19 @@ def maybe_auto_learn(verdict: Verdict, frames: List[Frame]) -> Optional[str]:
         if verdict.label == VerdictLabel.OK and allow_append == "1":
             label = os.getenv("PHASH_AUTO_ALLOW_LABEL", os.getenv("PHASH_AUTO_LABEL", "ok")).strip() or "ok"
             apath = get_allowlist_path()
-            if any(append_phash_to_allowlist(hx, apath, label) for hx in hashes):
+            added_any = False
+            for hx in hashes:
+                added_any = append_phash_to_allowlist(hx, apath, label) or added_any
+            if added_any:
                 return f"Auto-added pHash to allowlist ({apath})"
 
         if verdict.label == VerdictLabel.BLOCK and block_append == "1":
             label = os.getenv("PHASH_AUTO_BLOCK_LABEL", os.getenv("PHASH_AUTO_LABEL", "not_ok")).strip() or "not_ok"
             bpath = get_blocklist_path()
-            if any(append_phash_to_blocklist(hx, bpath, label) for hx in hashes):
+            added_any = False
+            for hx in hashes:
+                added_any = append_phash_to_blocklist(hx, bpath, label) or added_any
+            if added_any:
                 return f"Auto-added pHash to blocklist ({bpath})"
     except (ValueError, OSError):
         return None

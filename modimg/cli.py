@@ -14,6 +14,11 @@ from .utils import is_image_file, is_url
 LOGGER = get_logger("cli")
 
 
+def _enum_value(v: Any) -> str:
+    """Return Enum.value for serialization/output, fallback to str."""
+    return str(v.value) if hasattr(v, "value") else str(v)
+
+
 def _env_int(name: str, default: int) -> int:
     raw = os.getenv(name)
     if raw is None:
@@ -78,8 +83,8 @@ def _print_report(rep: Dict[str, Any]) -> None:
     LOGGER.info("%s", rep["name"])
     LOGGER.info(
         "FINAL: %s  (verdict=%s) | nudity=%.2f violence=%.2f hate=%.2f",
-        "OK" if v.label == "OK" else "NOT_OK",
-        v.label,
+        "OK" if _enum_value(v.label) == "OK" else "NOT_OK",
+        _enum_value(v.label),
         v.nudity_risk,
         v.violence_risk,
         v.hate_risk,
@@ -90,7 +95,7 @@ def _print_report(rep: Dict[str, Any]) -> None:
         LOGGER.info(" - %s", rep["auto_learn"])
 
     for r in results:
-        st = (r.status.value if hasattr(r.status, "value") else str(r.status)).lower()
+        st = _enum_value(r.status).lower()
         msg = ""
         if st == "ok" and r.scores:
             msg = ", ".join(f"{k}={float(vv):.2f}" for k, vv in _select_scores(r.name, r.scores))
@@ -121,8 +126,17 @@ def main(argv: List[str] | None = None) -> int:
             {
                 "name": rep["name"],
                 "path": rep["path"],
-                "verdict": rep["verdict"].__dict__,
-                "results": [r.__dict__ for r in rep["results"]],
+                "verdict": {
+                    **rep["verdict"].__dict__,
+                    "label": _enum_value(rep["verdict"].label),
+                },
+                "results": [
+                    {
+                        **r.__dict__,
+                        "status": _enum_value(r.status),
+                    }
+                    for r in rep["results"]
+                ],
                 "auto_learn": rep.get("auto_learn"),
             }
         )

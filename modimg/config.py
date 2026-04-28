@@ -95,7 +95,7 @@ class Config:
             sightengine_disable=env_bool("SIGHTENGINE_DISABLE", False),
             short_circuit_phash=env_bool("SHORT_CIRCUIT_PHASH", True),
             sample_frames=max(1, env_int("SAMPLE_FRAMES", 12)),
-            final_block_threshold=safe_float01(os.getenv("FINAL_BLOCK_THRESHOLD", "0.80"), default=0.80),
+            final_block_threshold=safe_float01(os.getenv("FINAL_BLOCK_THRESHOLD", "0.85"), default=0.85),
             parallel_engines=env_bool("MODIMG_PARALLEL_ENGINES", False),
             parallel_workers=max(1, env_int("MODIMG_PARALLEL_WORKERS", 4)),
             debug=env_bool("MODIMG_DEBUG", False) or env_bool("DEBUG", False),

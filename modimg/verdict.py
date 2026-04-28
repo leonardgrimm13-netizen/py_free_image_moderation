@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from typing import List, Optional
 
+from .config import get_config
 from .enums import EngineStatus, VerdictLabel
 from .types import EngineResult, Verdict
 from .utils import safe_float01
@@ -291,7 +292,7 @@ def compute_verdict(results: List[EngineResult]) -> Verdict:
             hate = bump(hate, h, f"OpenAI hate={h:.2f}", 0.50)
 
     # Final decision thresholds (configurable via .env)
-    block_t = _env_float("FINAL_BLOCK_THRESHOLD", 0.85)
+    block_t = get_config().final_block_threshold
     review_t = _env_float("FINAL_REVIEW_THRESHOLD", 0.40)
     label = VerdictLabel.OK
     if nudity >= block_t or violence >= block_t or hate >= block_t:
