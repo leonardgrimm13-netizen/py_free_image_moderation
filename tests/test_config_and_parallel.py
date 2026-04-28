@@ -109,3 +109,24 @@ def test_final_block_threshold_uses_config(monkeypatch) -> None:
     get_config(reload=True)
     verdict = compute_verdict([EngineResult(name="OpenNSFW2", status="ok", scores={"nsfw_probability": 0.90})])
     assert verdict.label == VerdictLabel.REVIEW
+
+
+def test_no_checks_policy_default_review(monkeypatch) -> None:
+    monkeypatch.delenv("NO_CHECKS_POLICY", raising=False)
+    verdict = compute_verdict([EngineResult(name="OpenNSFW2", status="skipped", error="disabled")])
+    assert verdict.label == VerdictLabel.REVIEW
+    assert "No checks ran (all engines skipped/disabled)." in verdict.reasons
+
+
+def test_no_checks_policy_ok(monkeypatch) -> None:
+    monkeypatch.setenv("NO_CHECKS_POLICY", "ok")
+    verdict = compute_verdict([EngineResult(name="OpenNSFW2", status="skipped", error="disabled")])
+    assert verdict.label == VerdictLabel.OK
+    assert "No checks ran (all engines skipped/disabled)." in verdict.reasons
+
+
+def test_no_checks_policy_block(monkeypatch) -> None:
+    monkeypatch.setenv("NO_CHECKS_POLICY", "block")
+    verdict = compute_verdict([EngineResult(name="OpenNSFW2", status="skipped", error="disabled")])
+    assert verdict.label == VerdictLabel.BLOCK
+    assert "No checks ran (all engines skipped/disabled)." in verdict.reasons

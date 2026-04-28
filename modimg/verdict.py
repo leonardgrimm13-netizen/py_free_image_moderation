@@ -31,6 +31,14 @@ def _status_lower(status: EngineStatus | str) -> str:
         return status.value.lower()
     return str(status).lower()
 
+def _no_checks_policy() -> str:
+    policy = (os.getenv("NO_CHECKS_POLICY", "review") or "review").strip().lower()
+    if policy in ("ok", "allow", "open"):
+        return "ok"
+    if policy in ("block", "deny", "fail", "fail_closed"):
+        return "block"
+    return "review"
+
 
 def compute_verdict(results: List[EngineResult]) -> Verdict:
     """
@@ -102,13 +110,19 @@ def compute_verdict(results: List[EngineResult]) -> Verdict:
         names = ", ".join([r.name for r in err_all[:6]])
         reasons.append(f"Non-core checks failed (ignored): {names}")
 
-    # If nothing produced scores (all checks were skipped/disabled), treat as OK by default.
-    # This avoids false NOT_OK verdicts when the user hasn't installed optional dependencies
-    # or has no API keys configured.
+    # If nothing ran successfully, apply configurable fallback policy.
     if not any(_status_lower(r.status) == EngineStatus.OK.value for r in results):
-        if not reasons:
-            reasons.append("No checks ran (all engines skipped/disabled).")
-        return Verdict(VerdictLabel.OK, nudity, violence, hate, reasons)
+        reason = "No checks ran (all engines skipped/disabled)."
+        if reason not in reasons:
+            reasons.append(reason)
+        policy = _no_checks_policy()
+        if policy == "ok":
+            label = VerdictLabel.OK
+        elif policy == "block":
+            label = VerdictLabel.BLOCK
+        else:
+            label = VerdictLabel.REVIEW
+        return Verdict(label, nudity, violence, hate, reasons)
 
 
     # Helpers

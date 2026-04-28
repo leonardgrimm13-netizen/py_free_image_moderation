@@ -10,22 +10,31 @@ from ..config import project_root
 
 _YOLO_CACHE: Dict[Tuple[str, str], Any] = {}
 
-def _load_model() -> Any:
-    backend = os.getenv("YOLO_BACKEND", "ultralytics").strip().lower()
-    # Keep a simple cache key; backend kept for future
+def _resolve_model_name() -> Tuple[str, bool]:
     model_name = (
         os.getenv("YOLO_WORLD_MODEL", "").strip()
         or os.getenv("YOLO_WEAPON_MODEL", "").strip()
         or os.getenv("YOLO_WEAPONS_WEIGHTS", "").strip()
     )
+    explicit = bool(model_name)
+    return model_name, explicit
+
+
+def _default_model_path() -> str:
+    return os.path.join(project_root(), ".cache", "ultralytics", "weights", "yolov8s-oiv7.pt")
+
+
+def _load_model() -> Any:
+    backend = os.getenv("YOLO_BACKEND", "ultralytics").strip().lower()
+    # Keep a simple cache key; backend kept for future
+    model_name, _ = _resolve_model_name()
     # Safety: older templates accidentally used the literal string "yolo-world"
     # as a placeholder. Ultralytics' YOLO() expects a valid model name/path.
     # Treat that placeholder as "unset" and fall back to our default weights.
     if model_name.strip().lower() in {"yolo-world", "yolo_world"}:
         model_name = ""
     if not model_name:
-        # default weight shipped in repo
-        model_name = os.path.join(project_root(), ".cache", "ultralytics", "weights", "yolov8s-oiv7.pt")
+        model_name = _default_model_path()
     key = (backend, model_name)
     if key in _YOLO_CACHE:
         return _YOLO_CACHE[key]
@@ -50,6 +59,19 @@ class YOLOWorldWeaponsEngine(Engine):
         ok, why = self.available()
         if not ok:
             return EngineResult(name=self.name, status="skipped", error=why, took_ms=now_ms()-start)
+        model_name, explicit = _resolve_model_name()
+        if model_name.strip().lower() in {"yolo-world", "yolo_world"}:
+            explicit = False
+            model_name = ""
+        if not explicit:
+            default_model = _default_model_path()
+            if not os.path.exists(default_model):
+                return EngineResult(
+                    name=self.name,
+                    status="skipped",
+                    error=f"missing default YOLO model path: {default_model}",
+                    took_ms=now_ms() - start,
+                )
 
         mdl = _load_model()
         conf = float(os.getenv("YOLO_CONF", "0.25").strip() or 0.25)
