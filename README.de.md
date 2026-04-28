@@ -192,6 +192,8 @@ Nützliche Schalter:
 - `OPENAI_DISABLE=1` / `SIGHTENGINE_*` weglassen, wenn API-Engines nicht genutzt werden
 - `PHASH_ALLOW_DISABLE=1` oder `PHASH_BLOCK_DISABLE=1` zum gezielten Abschalten
 - `SCORE_VERBOSE=1` für ausführlichere Engine-Scores
+- `MODIMG_LOG_LEVEL=DEBUG|INFO|WARNING|ERROR` für die zentrale Protokollierung
+- `MODIMG_PARALLEL_ENGINES=1` unabhängige engines gleichzeitig ausführen
 
 ---
 
