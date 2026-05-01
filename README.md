@@ -178,6 +178,8 @@ Optional engines may be missing; they must show up as `skipped`/`disabled` in ou
 ## 🔧 Important configuration (.env)
 The project automatically loads `.env` from the project root. Example:
 
+The loader checks `.env`, then `.env.txt`, and finally `.env.example` as fallback defaults. For best results, copy `.env.example` to `.env` and edit `.env` for your environment.
+
 ```env
 # API engines
 OPENAI_API_KEY=...
@@ -200,6 +202,7 @@ PHASH_AUTO_BLOCK_APPEND=1
 ```
 
 Useful toggles:
+- Main performance knobs: `SAMPLE_FRAMES`, `API_POLICY`, `YOLO_IMGSZ`, `YOLO_MAX_FRAMES`, `YOLO_MAX_DET`, `OCR_MAX_FRAMES`, `PHASH_ALLOW_MAX_DISTANCE`, `PHASH_BLOCK_MAX_DISTANCE`
 - `API_POLICY=always|on_review|never` controls when API engines run
 - `OPENAI_DISABLE=1` / omit `SIGHTENGINE_*` if you don’t use API engines
 - `PHASH_ALLOW_DISABLE=1` or `PHASH_BLOCK_DISABLE=1` to disable them selectively

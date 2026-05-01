@@ -178,6 +178,8 @@ Optionale Engines dürfen fehlen; sie müssen in der Ausgabe sauber als `skipped
 ## 🔧 Wichtige Konfiguration (.env)
 Das Projekt lädt automatisch `.env` aus dem Projekt-Root. Beispiel:
 
+Der Loader prüft `.env`, dann `.env.txt` und nutzt `.env.example` als Fallback-Defaults. Für beste Ergebnisse `.env.example` nach `.env` kopieren und die `.env` anpassen.
+
 ```env
 # API-Engines
 OPENAI_API_KEY=...
@@ -200,6 +202,7 @@ PHASH_AUTO_BLOCK_APPEND=1
 ```
 
 Nützliche Schalter:
+- Wichtige Performance-Regler: `SAMPLE_FRAMES`, `API_POLICY`, `YOLO_IMGSZ`, `YOLO_MAX_FRAMES`, `YOLO_MAX_DET`, `OCR_MAX_FRAMES`, `PHASH_ALLOW_MAX_DISTANCE`, `PHASH_BLOCK_MAX_DISTANCE`
 - `API_POLICY=always|on_review|never` steuert, wann API-Engines laufen
 - `OPENAI_DISABLE=1` / `SIGHTENGINE_*` weglassen, wenn API-Engines nicht genutzt werden
 - `PHASH_ALLOW_DISABLE=1` oder `PHASH_BLOCK_DISABLE=1` zum gezielten Abschalten
