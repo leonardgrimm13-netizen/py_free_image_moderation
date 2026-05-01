@@ -149,6 +149,8 @@ python moderate_image.py ./images --recursive --no-apis --benchmark-json benchma
 python moderate_image.py ./images --recursive --no-apis --json moderation_report.json --benchmark-json benchmark.json
 ```
 
+Benchmark JSON field `total_wall_ms` includes only wall-clock time spent processing inputs (not time spent writing JSON output files).
+
 **Exit codes:**
 - `0` = all results are `OK`
 - `2` = at least one result is not `OK`

@@ -164,12 +164,13 @@ def main(argv: List[str] | None = None) -> int:
             }
         )
 
-    if args.json_out:
-        Path(args.json_out).write_text(json.dumps(reports if len(reports) > 1 else reports[0], ensure_ascii=False, indent=2), encoding="utf-8")
     benchmark_summary = None
     if benchmark_enabled:
-        total_wall_ms = int((time.perf_counter() - bench_start) * 1000) if bench_start is not None else None
-        benchmark_summary = summarize_benchmark(benchmark_items, total_wall_ms=total_wall_ms)
+        processing_wall_ms = int((time.perf_counter() - bench_start) * 1000) if bench_start is not None else None
+        benchmark_summary = summarize_benchmark(benchmark_items, total_wall_ms=processing_wall_ms)
+
+    if args.json_out:
+        Path(args.json_out).write_text(json.dumps(reports if len(reports) > 1 else reports[0], ensure_ascii=False, indent=2), encoding="utf-8")
     if benchmark_summary is not None and args.benchmark:
         LOGGER.info("%s", format_benchmark_summary(benchmark_summary))
     if benchmark_summary is not None and args.benchmark_json:

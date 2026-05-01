@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from math import ceil
+from math import ceil, isfinite
 from statistics import median
 from typing import Any
 
@@ -24,8 +24,14 @@ def safe_int_ms(value: Any) -> int:
     if value is None:
         return 0
     try:
-        out = int(float(value))
-    except (TypeError, ValueError):
+        f = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+    if not isfinite(f):
+        return 0
+    try:
+        out = int(f)
+    except (TypeError, ValueError, OverflowError):
         return 0
     return out if out >= 0 else 0
 
