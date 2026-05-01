@@ -3,10 +3,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any, Dict, List
 
 from .config import get_config, load_dotenv_candidates
+from .benchmark import collect_benchmark_item, format_benchmark_summary, summarize_benchmark
 from .logging_utils import get_logger
 from .pipeline import run_on_input
 from .utils import is_image_file, is_url
@@ -113,7 +115,10 @@ def main(argv: List[str] | None = None) -> int:
     ap.add_argument("--sample-frames", type=int, default=cfg.sample_frames, help="Max frames to sample from animated images")
     ap.add_argument("--recursive", action="store_true", help="When input is a directory, recurse")
     ap.add_argument("--json", dest="json_out", default="", help="Write report(s) to JSON file")
+    ap.add_argument("--benchmark", action="store_true", help="Print runtime benchmark summary")
+    ap.add_argument("--benchmark-json", default="", help="Write runtime benchmark summary to JSON file")
     args = ap.parse_args(argv)
+    benchmark_enabled = bool(args.benchmark or args.benchmark_json)
 
     if not args.input:
         ap.error("input is required (path/dir/url)")
@@ -130,8 +135,15 @@ def main(argv: List[str] | None = None) -> int:
         return 2
 
     reports: List[Dict[str, Any]] = []
+    benchmark_items: List[Dict[str, Any]] = []
+    bench_start = time.perf_counter() if benchmark_enabled else None
     for p in inputs:
+        if benchmark_enabled:
+            file_start = time.perf_counter()
         rep = run_on_input(p, no_apis=args.no_apis, sample_frames=args.sample_frames)
+        if benchmark_enabled:
+            file_total_ms = int((time.perf_counter() - file_start) * 1000)
+            benchmark_items.append(collect_benchmark_item(rep, file_total_ms))
         _print_report(rep)
         reports.append(
             {
@@ -154,6 +166,14 @@ def main(argv: List[str] | None = None) -> int:
 
     if args.json_out:
         Path(args.json_out).write_text(json.dumps(reports if len(reports) > 1 else reports[0], ensure_ascii=False, indent=2), encoding="utf-8")
+    benchmark_summary = None
+    if benchmark_enabled:
+        total_wall_ms = int((time.perf_counter() - bench_start) * 1000) if bench_start is not None else None
+        benchmark_summary = summarize_benchmark(benchmark_items, total_wall_ms=total_wall_ms)
+    if benchmark_summary is not None and args.benchmark:
+        LOGGER.info("%s", format_benchmark_summary(benchmark_summary))
+    if benchmark_summary is not None and args.benchmark_json:
+        Path(args.benchmark_json).write_text(json.dumps(benchmark_summary, ensure_ascii=False, indent=2), encoding="utf-8")
 
     return 0 if all(r["verdict"]["label"] == "OK" for r in reports) else 2
 

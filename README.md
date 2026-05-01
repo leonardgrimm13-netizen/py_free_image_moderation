@@ -140,6 +140,15 @@ python moderate_image.py ./images --recursive --no-apis
 python moderate_image.py ./images --recursive --json moderation_report.json
 ```
 
+### Benchmark mode
+Benchmark mode measures runtime per file and per engine without changing moderation decisions.
+
+```bash
+python moderate_image.py ./images --recursive --no-apis --benchmark
+python moderate_image.py ./images --recursive --no-apis --benchmark-json benchmark.json
+python moderate_image.py ./images --recursive --no-apis --json moderation_report.json --benchmark-json benchmark.json
+```
+
 **Exit codes:**
 - `0` = all results are `OK`
 - `2` = at least one result is not `OK`
