@@ -149,6 +149,8 @@ python moderate_image.py ./images --recursive --no-apis --benchmark-json benchma
 python moderate_image.py ./images --recursive --no-apis --json moderation_report.json --benchmark-json benchmark.json
 ```
 
+Das Benchmark-JSON-Feld `total_wall_ms` enthält nur die Wall-Clock-Zeit für die Verarbeitung der Eingaben (nicht die Zeit für das Schreiben von JSON-Ausgabedateien).
+
 **Exit Codes:**
 - `0` = alle Ergebnisse `OK`
 - `2` = mindestens ein Ergebnis nicht `OK`

@@ -5,6 +5,7 @@ from modimg.benchmark import (
     enum_value,
     format_benchmark_summary,
     percentile,
+    safe_int_ms,
     summarize_benchmark,
 )
 from modimg.enums import EngineStatus, VerdictLabel
@@ -24,6 +25,23 @@ def test_percentile_empty_single_and_multiple_values() -> None:
     assert percentile([1, 2, 3, 4, 100], 95) >= 4
     assert percentile([1, 2, 3], -10) == 1
     assert percentile([1, 2, 3], 200) == 3
+
+
+
+def test_safe_int_ms_handles_edge_cases() -> None:
+    assert safe_int_ms(None) == 0
+    assert safe_int_ms("12") == 12
+    assert safe_int_ms(12.7) == 12
+    assert safe_int_ms(-5) == 0
+    assert safe_int_ms("not-a-number") == 0
+    assert safe_int_ms(float("nan")) == 0
+    assert safe_int_ms(float("inf")) == 0
+    assert safe_int_ms(float("-inf")) == 0
+
+
+def test_percentile_ignores_nan_inf_like_values_without_crashing() -> None:
+    result = percentile([1, float("inf"), float("nan"), 10], 95)
+    assert isinstance(result, int)
 
 
 def test_collect_benchmark_item_basic() -> None:

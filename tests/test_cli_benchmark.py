@@ -120,6 +120,7 @@ def test_cli_benchmark_still_does_not_change_old_json_single_report(tmp_path) ->
     assert isinstance(moderation_payload, dict)
     assert "benchmark" not in moderation_payload
     assert "reports" not in moderation_payload
+    assert "total_wall_ms" in benchmark_payload
     assert benchmark_payload["version"] == 1
 
 
