@@ -226,3 +226,21 @@ def test_forbidden_symbols_engine_max_frames_zero_skips_inference(monkeypatch, t
     assert result.status == EngineStatus.OK
     assert result.details["max_frames"] == 0
     assert result.scores["forbidden_symbols_detection_count"] == 0.0
+
+
+def test_forbidden_symbols_max_frames_zero_does_not_load_model(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_ENABLE", "1")
+    monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_MODEL", str(tmp_path / "missing.pt"))
+    monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_MAX_FRAMES", "0")
+
+    def fail_load(*args, **kwargs):
+        raise AssertionError("YOLO model must not be loaded when max_frames <= 0")
+
+    monkeypatch.setattr("modimg.engines.forbidden_symbols_yolo._load_model", fail_load)
+
+    result = YOLOForbiddenSymbolsEngine().execute("dummy.png", _frame())
+
+    assert result.status == EngineStatus.OK
+    assert result.scores["forbidden_symbols_detection_count"] == 0.0
+    assert result.details["inference_skipped"] is True
+    assert result.details["skip_reason"] == "FORBIDDEN_SYMBOLS_YOLO_MAX_FRAMES<=0"

@@ -70,3 +70,66 @@ def test_yolo_skips_when_default_model_path_missing(monkeypatch, tmp_path) -> No
     assert result.error is not None
     assert "missing default YOLO model path:" in result.error
     assert "yolov8s-oiv7.pt" in result.error
+
+
+def test_yolo_weapon_model_project_root_relative_path(monkeypatch, tmp_path) -> None:
+    import sys
+    import types
+
+    from modimg.engines import yolo_weapons
+
+    model_dir = tmp_path / "weights"
+    model_dir.mkdir()
+    model_path = model_dir / "weapon.pt"
+    model_path.write_bytes(b"fake weights")
+    loaded: list[str] = []
+
+    class FakeYOLO:
+        names = {}
+
+        def __init__(self, model_ref: str) -> None:
+            loaded.append(model_ref)
+
+        def predict(self, *args, **kwargs):
+            return []
+
+    monkeypatch.setitem(sys.modules, "ultralytics", types.SimpleNamespace(YOLO=FakeYOLO))
+    monkeypatch.setenv("YOLO_WORLD_MODEL", "")
+    monkeypatch.setenv("YOLO_WEAPON_MODEL", "weights/weapon.pt")
+    monkeypatch.setenv("YOLO_WEAPONS_WEIGHTS", "")
+    monkeypatch.setattr(yolo_weapons, "project_root", lambda: str(tmp_path))
+    yolo_weapons._YOLO_CACHE.clear()
+
+    frame = Frame(idx=0, pil=Image.new("RGB", (2, 2)))
+    result = YOLOWorldWeaponsEngine().run(path="dummy.png", frames=[frame])
+
+    assert result.status == "ok"
+    assert loaded == [str(model_path.resolve())]
+    assert result.details["model"] == str(model_path.resolve())
+
+
+def test_yolo_weapon_model_missing_explicit_path_skips_before_import(monkeypatch, tmp_path) -> None:
+    import builtins
+
+    from modimg.engines import yolo_weapons
+
+    real_import = builtins.__import__
+
+    def fail_ultralytics_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name.split(".", 1)[0] == "ultralytics":
+            raise AssertionError("ultralytics should not be imported for a missing explicit model path")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setenv("YOLO_WORLD_MODEL", "")
+    monkeypatch.setenv("YOLO_WEAPON_MODEL", "weights/missing.pt")
+    monkeypatch.setenv("YOLO_WEAPONS_WEIGHTS", "")
+    monkeypatch.setattr(yolo_weapons, "project_root", lambda: str(tmp_path))
+    monkeypatch.setattr(builtins, "__import__", fail_ultralytics_import)
+
+    frame = Frame(idx=0, pil=Image.new("RGB", (2, 2)))
+    result = YOLOWorldWeaponsEngine().run(path="dummy.png", frames=[frame])
+
+    assert result.status == "skipped"
+    assert result.error is not None
+    assert "explicit YOLO weapons model path not found" in result.error
+    assert "weights/missing.pt" in result.error

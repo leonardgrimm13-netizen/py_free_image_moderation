@@ -158,11 +158,6 @@ class YOLOForbiddenSymbolsEngine(Engine):
         model_size = model_path.stat().st_size if model_exists else 0
         model_pointer = _looks_like_model_pointer(model_path) if model_exists else False
 
-        try:
-            model = _load_model(str(model_path))
-        except ImportError as exc:
-            return EngineResult(name=self.name, status=EngineStatus.SKIPPED, error=str(exc), took_ms=now_ms() - start)
-
         conf = env_float("FORBIDDEN_SYMBOLS_YOLO_CONF", 0.20)
         iou = env_float("FORBIDDEN_SYMBOLS_YOLO_IOU", 0.45)
         imgsz = env_int("FORBIDDEN_SYMBOLS_YOLO_IMGSZ", 960)
@@ -170,6 +165,45 @@ class YOLOForbiddenSymbolsEngine(Engine):
         max_frames = env_int("FORBIDDEN_SYMBOLS_YOLO_MAX_FRAMES", 2)
         review_conf = env_float("FORBIDDEN_SYMBOLS_YOLO_REVIEW_CONF", 0.30)
         block_conf = env_float("FORBIDDEN_SYMBOLS_YOLO_BLOCK_CONF", 0.90)
+        if max_frames <= 0:
+            return EngineResult(
+                name=self.name,
+                status=EngineStatus.OK,
+                scores={
+                    "forbidden_symbols_detected": 0.0,
+                    "forbidden_symbols_max_conf": 0.0,
+                    "forbidden_symbols_review_hit": 0.0,
+                    "forbidden_symbols_block_hit": 0.0,
+                    "forbidden_symbols_detection_count": 0.0,
+                    "forbidden_symbols_top_conf": 0.0,
+                },
+                details={
+                    "model_path": str(model_path),
+                    "model_exists": bool(model_exists),
+                    "model_size_bytes": int(model_size),
+                    "imgsz": int(imgsz),
+                    "conf": float(conf),
+                    "iou": float(iou),
+                    "max_det": int(max_det),
+                    "max_frames": int(max_frames),
+                    "review_conf": float(review_conf),
+                    "block_conf": float(block_conf),
+                    "detection_count": 0,
+                    "top_label": "",
+                    "top_confidence": 0.0,
+                    "detections": [],
+                    "model_pointer_detected": bool(model_pointer),
+                    "inference_skipped": True,
+                    "skip_reason": "FORBIDDEN_SYMBOLS_YOLO_MAX_FRAMES<=0",
+                },
+                took_ms=now_ms() - start,
+            )
+
+        try:
+            model = _load_model(str(model_path))
+        except ImportError as exc:
+            return EngineResult(name=self.name, status=EngineStatus.SKIPPED, error=str(exc), took_ms=now_ms() - start)
+
         device_raw = (os.getenv("FORBIDDEN_SYMBOLS_YOLO_DEVICE", "auto") or "auto").strip()
         device = None if device_raw.lower() in ("", "auto") else device_raw
         include_boxes = env_bool("FORBIDDEN_SYMBOLS_YOLO_INCLUDE_BOXES", True)
@@ -256,6 +290,7 @@ class YOLOForbiddenSymbolsEngine(Engine):
                 "top_confidence": safe_float01(max_conf),
                 "detections": detections,
                 "model_pointer_detected": bool(model_pointer),
+                "inference_skipped": False,
             },
             took_ms=now_ms() - start,
         )
