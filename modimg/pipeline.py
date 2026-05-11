@@ -27,6 +27,7 @@ from .engines import (
     NudeNetEngine,
     OpenNSFW2Engine,
     YOLOWorldWeaponsEngine,
+    YOLOForbiddenSymbolsEngine,
     OpenAIModerationEngine,
     SightengineEngine,
 )
@@ -39,7 +40,7 @@ def build_pre_engines(*, no_apis: bool = False) -> List[Engine]:
 
 
 def build_local_engines(*, no_apis: bool = False) -> List[Engine]:
-    return [OCREngine(), NudeNetEngine(), OpenNSFW2Engine(), YOLOWorldWeaponsEngine()]
+    return [OCREngine(), NudeNetEngine(), OpenNSFW2Engine(), YOLOWorldWeaponsEngine(), YOLOForbiddenSymbolsEngine()]
 
 
 def build_api_engines(*, no_apis: bool = False) -> List[Engine]:

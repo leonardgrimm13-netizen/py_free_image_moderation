@@ -65,6 +65,9 @@ def compute_verdict(results: List[EngineResult]) -> Verdict:
         "ocr": "OCR text",
         "openai": "OpenAI Moderation",
         "sightengine": "Sightengine",
+        "forbidden_symbols_yolo": "YOLO forbidden symbols",
+        "forbidden_symbols": "YOLO forbidden symbols",
+        "yolo_forbidden_symbols": "YOLO forbidden symbols",
     }
 
     core_env = (os.getenv("CORE_ENGINES", "") or "").strip()
@@ -81,6 +84,7 @@ def compute_verdict(results: List[EngineResult]) -> Verdict:
             "OCR text",
             "OpenAI Moderation",
             "Sightengine",
+            "YOLO forbidden symbols",
         }
 
     err_all = [r for r in results if _status_lower(r.status) == EngineStatus.ERROR.value]
@@ -190,6 +194,23 @@ def compute_verdict(results: List[EngineResult]) -> Verdict:
             n = sf(s.get("nsfw_combined", 0.0))
             nudity = bump(nudity, n, f"NSFWJS nsfw={n:.2f}", 0.50)
 
+
+        if r.name == "YOLO forbidden symbols":
+            max_conf = sf(s.get("forbidden_symbols_max_conf", 0.0))
+            block_conf = _env_float("FORBIDDEN_SYMBOLS_YOLO_BLOCK_CONF", 0.90)
+            review_conf = _env_float("FORBIDDEN_SYMBOLS_YOLO_REVIEW_CONF", 0.30)
+            top_label = ""
+            try:
+                top_label = str((r.details or {}).get("top_label") or "").strip()
+            except Exception:
+                top_label = ""
+            label_part = f": {top_label}" if top_label else ""
+            if max_conf >= block_conf:
+                reasons.append(f"YOLO forbidden symbol detected{label_part} confidence={max_conf:.2f}")
+                hate = max(hate, 1.0)
+            elif max_conf >= review_conf:
+                reasons.append(f"YOLO possible forbidden symbol{label_part} confidence={max_conf:.2f}")
+                hate = max(hate, _env_float("FINAL_REVIEW_THRESHOLD", 0.40))
 
         if r.name == "YOLO-World weapons":
             realistic = sf(s.get("yolo_firearm_realistic", 0.0))

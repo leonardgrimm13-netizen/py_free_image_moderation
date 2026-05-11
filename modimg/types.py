@@ -80,7 +80,7 @@ class Engine:
             if result.took_ms is None:
                 result.took_ms = now_ms() - t0
             return result
-        except (ValueError, RuntimeError, OSError) as exc:
+        except (ValueError, RuntimeError, OSError, ImportError) as exc:
             self.logger.warning("engine failed: %s", exc)
             return EngineResult(name=self.name, status=EngineStatus.ERROR, error=f"{type(exc).__name__}: {exc}", took_ms=now_ms() - t0)
 

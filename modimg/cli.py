@@ -35,6 +35,15 @@ def _select_scores(engine_name: str, scores: Dict[str, Any]) -> List[tuple[str, 
     if os.getenv("SCORE_VERBOSE", "0").strip() == "1":
         return [(k, float(v)) for k, v in scores.items() if isinstance(v, (float, int))]
 
+    if (engine_name or "") == "YOLO forbidden symbols":
+        preferred = [
+            "forbidden_symbols_max_conf",
+            "forbidden_symbols_detection_count",
+            "forbidden_symbols_review_hit",
+            "forbidden_symbols_block_hit",
+        ]
+        return [(k, float(scores[k])) for k in preferred if k in scores and isinstance(scores[k], (float, int))]
+
     if "sightengine" in (engine_name or "").lower():
         mode = (os.getenv("SIGHTENGINE_SCORE_MODE", "compact") or "compact").strip().lower()
         if mode in ("full", "all", "verbose"):

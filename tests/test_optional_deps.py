@@ -20,6 +20,7 @@ def test_missing_optional_libs_are_skipped(monkeypatch) -> None:
         return real_import(name, globals, locals, fromlist, level)
 
     monkeypatch.setenv("OCR_ENABLE", "1")
+    monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_ENABLE", "0")
     monkeypatch.setattr(builtins, "__import__", fake_import)
 
     engines = build_main_engines(no_apis=True)
@@ -31,6 +32,7 @@ def test_missing_optional_libs_are_skipped(monkeypatch) -> None:
     assert by_name["NudeNet"].status == "skipped"
     assert by_name["OpenNSFW2"].status == "skipped"
     assert by_name["YOLO-World weapons"].status == "skipped"
+    assert by_name["YOLO forbidden symbols"].status == "skipped"
 
     for result in by_name.values():
         assert result.status != "error"

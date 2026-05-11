@@ -17,7 +17,7 @@ dependencies = [
 
 [project.optional-dependencies]
 api = ["openai", "requests"]
-vision = ["opennsfw2", "nudenet", "ultralytics", "pytesseract"]
+vision = ["opennsfw2", "nudenet", "ultralytics>=8.3.0", "pytesseract"]
 dev = ["pytest", "pytest-cov"]
 
 [project.scripts]

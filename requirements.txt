@@ -4,6 +4,6 @@ numpy>=1.26.0
 ImageHash>=4.3.1
 opennsfw2>=0.1.0
 nudenet>=3.4.2
-ultralytics>=8.0.0
+ultralytics>=8.3.0
 pytesseract>=0.3.10
 requests>=2.31.0

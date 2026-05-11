@@ -76,6 +76,7 @@ def test_build_main_engines_kept_for_backward_compatibility(monkeypatch) -> None
         "NudeNet",
         "OpenNSFW2",
         "YOLO-World weapons",
+        "YOLO forbidden symbols",
         "OpenAI Moderation",
         "Sightengine",
     ]
