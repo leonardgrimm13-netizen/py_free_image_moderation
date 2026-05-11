@@ -10,32 +10,54 @@ from typing import Any, Dict, List
 from ..config import project_root
 from ..enums import EngineStatus
 from ..types import Engine, EngineResult, Frame
-from ..utils import env_bool, env_int, now_ms, safe_float01
+from ..utils import env_bool, env_float, env_int, env_label_set, now_ms, safe_float01
 
 _FORBIDDEN_SYMBOLS_YOLO_CACHE: Dict[str, Any] = {}
 
 
-def _env_float(name: str, default: float) -> float:
-    raw = os.getenv(name)
-    if raw is None:
-        return float(default)
-    try:
-        return float(str(raw).strip())
-    except Exception:
-        return float(default)
+DEFAULT_FORBIDDEN_SYMBOLS_MODEL = "models/forbidden_symbols_yolo.pt"
 
 
-def _env_label_set(name: str, default: str = "") -> set[str]:
-    raw = os.getenv(name, default) or default
-    return {x.strip().lower() for x in raw.split(",") if x.strip()}
+def _candidate_model_paths(raw: str) -> list[Path]:
+    p = Path(raw).expanduser()
+    if p.is_absolute():
+        return [p]
+    candidates = [Path(project_root()) / p, Path.cwd() / p]
+    # Wheels installed with data_files may place the model under sys.prefix/models.
+    candidates.append(Path(sys.prefix) / p)
+    out: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate.resolve(strict=False))
+        if key not in seen:
+            seen.add(key)
+            out.append(candidate)
+    return out
 
 
 def _resolve_model_path(model_path: str | None = None) -> Path:
-    raw = (model_path or os.getenv("FORBIDDEN_SYMBOLS_YOLO_MODEL", "models/forbidden_symbols_yolo.pt") or "models/forbidden_symbols_yolo.pt").strip()
-    p = Path(raw)
-    if not p.is_absolute():
-        p = Path(project_root()) / p
-    return p.resolve()
+    """Resolve forbidden-symbols model path from absolute or project-root-relative input."""
+    raw = (model_path or os.getenv("FORBIDDEN_SYMBOLS_YOLO_MODEL", DEFAULT_FORBIDDEN_SYMBOLS_MODEL) or DEFAULT_FORBIDDEN_SYMBOLS_MODEL).strip()
+    candidates = _candidate_model_paths(raw)
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate.resolve()
+    return candidates[0].resolve(strict=False)
+
+
+def _missing_model_message(path: Path) -> str:
+    return (
+        f"missing forbidden symbols YOLO model: {path}. "
+        f"Expected the bundled model at {DEFAULT_FORBIDDEN_SYMBOLS_MODEL}; run from the project root, "
+        "install package data, or set FORBIDDEN_SYMBOLS_YOLO_MODEL to an absolute path."
+    )
+
+
+def _pointer_model_message(path: Path) -> str:
+    return (
+        f"model pointer file detected instead of real model weights: {path}. "
+        "This looks like a Git-LFS pointer; run `git lfs pull` and retry."
+    )
 
 
 def _looks_like_model_pointer(path: Path) -> bool:
@@ -51,16 +73,16 @@ def _looks_like_model_pointer(path: Path) -> bool:
 def _load_model(model_path: str | None = None) -> Any:
     resolved = _resolve_model_path(model_path)
     if not resolved.exists():
-        raise RuntimeError(f"missing forbidden symbols YOLO model: {resolved}")
+        raise RuntimeError(_missing_model_message(resolved))
     if _looks_like_model_pointer(resolved):
-        raise RuntimeError(f"model pointer file detected instead of real model weights: {resolved}")
+        raise RuntimeError(_pointer_model_message(resolved))
 
     key = str(resolved)
     if key in _FORBIDDEN_SYMBOLS_YOLO_CACHE:
         return _FORBIDDEN_SYMBOLS_YOLO_CACHE[key]
 
     if "ultralytics" not in sys.modules and importlib.util.find_spec("ultralytics") is None:
-        raise RuntimeError("ultralytics not available for forbidden symbols YOLO")
+        raise ImportError("ultralytics not available for forbidden symbols YOLO")
     YOLO = getattr(importlib.import_module("ultralytics"), "YOLO")  # heavy optional import; local inference only
 
     model = YOLO(str(resolved))
@@ -136,21 +158,24 @@ class YOLOForbiddenSymbolsEngine(Engine):
         model_size = model_path.stat().st_size if model_exists else 0
         model_pointer = _looks_like_model_pointer(model_path) if model_exists else False
 
-        model = _load_model(str(model_path))
+        try:
+            model = _load_model(str(model_path))
+        except ImportError as exc:
+            return EngineResult(name=self.name, status=EngineStatus.SKIPPED, error=str(exc), took_ms=now_ms() - start)
 
-        conf = _env_float("FORBIDDEN_SYMBOLS_YOLO_CONF", 0.20)
-        iou = _env_float("FORBIDDEN_SYMBOLS_YOLO_IOU", 0.45)
+        conf = env_float("FORBIDDEN_SYMBOLS_YOLO_CONF", 0.20)
+        iou = env_float("FORBIDDEN_SYMBOLS_YOLO_IOU", 0.45)
         imgsz = env_int("FORBIDDEN_SYMBOLS_YOLO_IMGSZ", 960)
         max_det = env_int("FORBIDDEN_SYMBOLS_YOLO_MAX_DET", 20)
         max_frames = env_int("FORBIDDEN_SYMBOLS_YOLO_MAX_FRAMES", 2)
-        review_conf = _env_float("FORBIDDEN_SYMBOLS_YOLO_REVIEW_CONF", 0.30)
-        block_conf = _env_float("FORBIDDEN_SYMBOLS_YOLO_BLOCK_CONF", 0.90)
+        review_conf = env_float("FORBIDDEN_SYMBOLS_YOLO_REVIEW_CONF", 0.30)
+        block_conf = env_float("FORBIDDEN_SYMBOLS_YOLO_BLOCK_CONF", 0.90)
         device_raw = (os.getenv("FORBIDDEN_SYMBOLS_YOLO_DEVICE", "auto") or "auto").strip()
         device = None if device_raw.lower() in ("", "auto") else device_raw
         include_boxes = env_bool("FORBIDDEN_SYMBOLS_YOLO_INCLUDE_BOXES", True)
-        ignore_labels = _env_label_set("FORBIDDEN_SYMBOLS_YOLO_IGNORE_LABELS", "")
+        ignore_labels = env_label_set("FORBIDDEN_SYMBOLS_YOLO_IGNORE_LABELS", "")
 
-        selected_frames = frames[:max_frames] if max_frames > 0 else frames
+        selected_frames = frames[:max_frames] if max_frames > 0 else []
         detections: list[dict[str, Any]] = []
         names = getattr(model, "names", None)
 

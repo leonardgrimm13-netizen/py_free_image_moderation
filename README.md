@@ -61,8 +61,8 @@ py_free_image_moderation/
 
 ### 1) Repository and venv
 ```bash
-git clone https://github.com/leonardgrimm13-netizen/free_image_moderation_TEST.git
-cd free_image_moderation_TEST
+git clone https://github.com/leonardgrimm13-netizen/py_free_image_moderation.git
+cd py_free_image_moderation
 
 python3 -m venv .venv
 source .venv/bin/activate
@@ -96,7 +96,16 @@ python3 -m pip install -r requirements_api.txt
 
 Includes everything from `requirements.txt` plus API clients:
 - `openai` (OpenAI moderation)
-- `sightengine` (Sightengine API)
+- `requests` (HTTP client used by Sightengine)
+- `sightengine` (Sightengine API package, kept for compatibility)
+
+Editable installs use the same split via extras:
+```bash
+python3 -m pip install -e ".[dev]"      # tests/linting only
+python3 -m pip install -e ".[local]"    # local vision engines
+python3 -m pip install -e ".[api]"      # API engines
+python3 -m pip install -e ".[all]"      # local vision + API engines
+```
 
 ### 3) Dev/Test dependencies
 ```bash
@@ -108,7 +117,9 @@ Includes e.g. `pytest` for local test runs.
 ### 4) Bundled local YOLO model
 This repository includes `models/forbidden_symbols_yolo.pt` directly as a normal repository file.
 
-The model is loaded locally by the `YOLO forbidden symbols` engine. It never calls Roboflow or any external API at runtime.
+The model is loaded locally by the `YOLO forbidden symbols` engine. It never calls Roboflow or any external API at runtime. If the file is missing, set `FORBIDDEN_SYMBOLS_YOLO_MODEL` to an absolute path or run from the project root. If Git-LFS left a pointer file instead of the real weights, run `git lfs pull`.
+
+The separate `YOLO-World weapons` engine is optional. By default it looks for `.cache/ultralytics/weights/yolov8s-oiv7.pt` and reports `SKIPPED` when no model exists. To use your own weapon weights, set either `YOLO_WEAPON_MODEL=/absolute/or/project/relative/model.pt` or `YOLO_WORLD_MODEL=/absolute/or/project/relative/model.pt`.
 
 ### 5) Optional system dependency for OCR
 For OCR you typically need a local Tesseract install:
@@ -216,6 +227,15 @@ PHASH_AUTO_LEARN_ENABLE=0
 PHASH_AUTO_ALLOW_APPEND=0
 PHASH_AUTO_BLOCK_APPEND=0
 
+# Optional YOLO-World weapons model
+# If unset and .cache/ultralytics/weights/yolov8s-oiv7.pt is missing, the engine is skipped.
+YOLO_WEAPON_MODEL=
+YOLO_WORLD_MODEL=
+YOLO_CONF=0.25
+YOLO_IMGSZ=640
+YOLO_MAX_FRAMES=2
+YOLO_DEVICE=
+
 # Local YOLO forbidden/harmful-symbol model
 FORBIDDEN_SYMBOLS_YOLO_ENABLE=1
 FORBIDDEN_SYMBOLS_YOLO_MODEL=models/forbidden_symbols_yolo.pt
@@ -240,6 +260,7 @@ Useful toggles:
 - `MODIMG_LOG_LEVEL=DEBUG|INFO|WARNING|ERROR` for centralized logging
 - `MODIMG_PARALLEL_ENGINES=1` to run independent engines concurrently (optional/experimental; disabled by default)
 - `NO_CHECKS_POLICY=review` controls the fallback when no engine ran: `ok` = allow, `review` = safer default, `block` = strictest mode
+- `YOLO_WEAPON_MODEL` or `YOLO_WORLD_MODEL` points to custom YOLO weapon weights; without weights the weapon engine is skipped, not failed.
 
 
 ### Local YOLO forbidden-symbol configuration
@@ -248,7 +269,8 @@ Useful toggles:
 - `FORBIDDEN_SYMBOLS_YOLO_REVIEW_CONF=0.30` controls when detections should push the verdict to `REVIEW`.
 - `FORBIDDEN_SYMBOLS_YOLO_BLOCK_CONF=0.90` controls when detections should push the verdict to `BLOCK`.
 - Recommended defaults: `conf=0.20`, `review=0.30`, `block=0.90`, `imgsz=960`.
-- For faster CPU scans, try `FORBIDDEN_SYMBOLS_YOLO_IMGSZ=640`, `FORBIDDEN_SYMBOLS_YOLO_MAX_FRAMES=1`, and `FORBIDDEN_SYMBOLS_YOLO_DEVICE=cpu`.
+- `FORBIDDEN_SYMBOLS_YOLO_MAX_FRAMES<=0` disables frame inference for this engine and returns an OK result with zero detections.
+- For faster CPU-only scans, try `SAMPLE_FRAMES=3`, `OCR_MAX_FRAMES=1`, `YOLO_IMGSZ=416`, `YOLO_MAX_FRAMES=1`, `YOLO_DEVICE=cpu`, `FORBIDDEN_SYMBOLS_YOLO_IMGSZ=640`, `FORBIDDEN_SYMBOLS_YOLO_MAX_FRAMES=1`, and `FORBIDDEN_SYMBOLS_YOLO_DEVICE=cpu`.
 - Unreliable labels can be ignored at runtime, e.g. `FORBIDDEN_SYMBOLS_YOLO_IGNORE_LABELS=communism,antifa`.
 
 ---

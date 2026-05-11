@@ -1,0 +1,3 @@
+include README.md README.de.md requirements*.txt
+include models/forbidden_symbols_yolo.pt
+recursive-include data *.txt

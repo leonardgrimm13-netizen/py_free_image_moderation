@@ -11,9 +11,10 @@ import hashlib
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+from ..enums import EngineStatus
 from ..types import Engine, EngineResult, Frame
 from ..config import project_root
-from ..utils import now_ms, safe_model_dump
+from ..utils import env_float, env_int, now_ms, safe_model_dump
 
 
 def _read_text(p: str) -> str:
@@ -255,18 +256,15 @@ class OpenAIModerationEngine(Engine):
         start = now_ms()
         ok, why = self.available()
         if not ok:
-            return EngineResult(name=self.name, status="skipped", error=why, took_ms=now_ms() - start)
+            return EngineResult(name=self.name, status=EngineStatus.SKIPPED, error=why, took_ms=now_ms() - start)
         if not frames:
-            return EngineResult(name=self.name, status="skipped", error="no frames", took_ms=now_ms() - start)
+            return EngineResult(name=self.name, status=EngineStatus.SKIPPED, error="no frames", took_ms=now_ms() - start)
 
         try:
             from openai import OpenAI
 
             # Client timeout (prevents extremely long hangs)
-            try:
-                timeout = float(os.getenv("OPENAI_REQUEST_TIMEOUT_SEC", "20"))
-            except Exception:
-                timeout = 20.0
+            timeout = env_float("OPENAI_REQUEST_TIMEOUT_SEC", 20.0, min_value=0.1)
             client = OpenAI(timeout=timeout)
 
             use_n = max(1, int(max_api_frames or 1))
@@ -281,7 +279,7 @@ class OpenAIModerationEngine(Engine):
                 cached = cache.get(ck) or {}
                 return EngineResult(
                     name=self.name,
-                    status="ok",
+                    status=EngineStatus.OK,
                     scores=cached.get("scores") or {},
                     details=cached.get("details") or {"cache_hit": True},
                     took_ms=now_ms() - start,
@@ -295,27 +293,12 @@ class OpenAIModerationEngine(Engine):
                 inputs.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
 
             # Retry / backoff policy
-            try:
-                max_retries = int(os.getenv("OPENAI_MAX_RETRIES", "6"))
-            except Exception:
-                max_retries = 6
-            try:
-                base_sleep = float(os.getenv("OPENAI_BACKOFF_BASE_SEC", "1.0"))
-            except Exception:
-                base_sleep = 1.0
-            try:
-                max_sleep = float(os.getenv("OPENAI_BACKOFF_MAX_SEC", "10"))
-            except Exception:
-                max_sleep = 10.0
-            try:
-                max_total_sleep = float(os.getenv("OPENAI_MAX_TOTAL_SLEEP_SEC", "30"))
-            except Exception:
-                max_total_sleep = 30.0
+            max_retries = env_int("OPENAI_MAX_RETRIES", 6)
+            base_sleep = env_float("OPENAI_BACKOFF_BASE_SEC", 1.0, min_value=0.0)
+            max_sleep = env_float("OPENAI_BACKOFF_MAX_SEC", 10.0, min_value=0.0)
+            max_total_sleep = env_float("OPENAI_MAX_TOTAL_SLEEP_SEC", 30.0, min_value=0.0)
             policy = os.getenv("OPENAI_429_POLICY", "retry").strip().lower()  # retry | skip
-            try:
-                max_429_retries = int(os.getenv("OPENAI_MAX_429_RETRIES", "3"))
-            except Exception:
-                max_429_retries = 3
+            max_429_retries = env_int("OPENAI_MAX_429_RETRIES", 3)
 
             total_slept = 0.0
             last_err: Optional[Exception] = None
@@ -385,14 +368,12 @@ class OpenAIModerationEngine(Engine):
                         if OpenAIModerationEngine._CACHE_WRITES_SINCE_FLUSH >= OpenAIModerationEngine._CACHE_FLUSH_EVERY_N:
                             self._save_cache(force=True)
 
-                    return EngineResult(name=self.name, status="ok", scores=out_scores, details=details, took_ms=now_ms() - start)
+                    return EngineResult(name=self.name, status=EngineStatus.OK, scores=out_scores, details=details, took_ms=now_ms() - start)
 
                 except Exception as e:
                     last_err = e
                     # Permanent auth problems: disable immediately (prevents long waits when scanning folders)
-                    msg = str(e)
-                    sc = getattr(e, "status_code", None)
-                    if sc in (401, 403) or ("Error code: 401" in msg) or ("Error code: 403" in msg) or ("deactivated" in msg.lower()):
+                    if self._is_auth_error(e):
                         OpenAIModerationEngine._DISABLED_REASON = "OpenAI disabled: invalid/deactivated API key (401/403). Remove OPENAI_API_KEY or set OPENAI_DISABLE=1"
                         break
                     # Fast handling for 429
@@ -421,17 +402,17 @@ class OpenAIModerationEngine(Engine):
             if OpenAIModerationEngine._DISABLED_REASON:
                 return EngineResult(
                     name=self.name,
-                    status="skipped",
+                    status=EngineStatus.SKIPPED,
                     error=OpenAIModerationEngine._DISABLED_REASON,
                     took_ms=now_ms() - start,
                 )
 
             return EngineResult(
                 name=self.name,
-                status="skipped",
+                status=EngineStatus.SKIPPED,
                 error=f"rate/quota or error: {last_err}",
                 took_ms=now_ms() - start,
             )
 
         except Exception as e:
-            return EngineResult(name=self.name, status="error", error=str(e), took_ms=now_ms() - start)
+            return EngineResult(name=self.name, status=EngineStatus.ERROR, error=str(e), took_ms=now_ms() - start)

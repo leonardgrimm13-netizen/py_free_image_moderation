@@ -13,12 +13,20 @@ license = { text = "Proprietary" }
 dependencies = [
   "Pillow>=10.0.0",
   "numpy>=1.26.0",
+  "ImageHash>=4.3.1",
 ]
 
 [project.optional-dependencies]
-api = ["openai", "requests"]
-vision = ["opennsfw2", "nudenet", "ultralytics>=8.3.0", "pytesseract"]
-dev = ["pytest", "pytest-cov"]
+# Local/vision engines: OCR, NudeNet, OpenNSFW2, YOLO-World weapons, and YOLO forbidden symbols.
+local = ["opennsfw2>=0.1.0", "nudenet>=3.4.2", "ultralytics>=8.3.0", "pytesseract>=0.3.10"]
+vision = ["opennsfw2>=0.1.0", "nudenet>=3.4.2", "ultralytics>=8.3.0", "pytesseract>=0.3.10"]
+# API engines and HTTP client used by Sightengine.
+api = ["openai>=1.0.0", "requests>=2.31.0", "sightengine>=1.0.0"]
+dev = ["pytest>=8.0.0", "pytest-cov>=5.0.0", "ruff>=0.4.0"]
+all = [
+  "opennsfw2>=0.1.0", "nudenet>=3.4.2", "ultralytics>=8.3.0", "pytesseract>=0.3.10",
+  "openai>=1.0.0", "requests>=2.31.0", "sightengine>=1.0.0",
+]
 
 [project.scripts]
 moderate-image = "modimg.cli:main"
@@ -30,3 +38,13 @@ include-package-data = true
 where = ["."]
 include = ["modimg*"]
 exclude = ["tests*"]
+
+[tool.setuptools.data-files]
+"models" = ["models/forbidden_symbols_yolo.pt"]
+
+[tool.ruff]
+line-length = 140
+
+[tool.ruff.lint]
+select = ["E", "F"]
+ignore = ["E501"]

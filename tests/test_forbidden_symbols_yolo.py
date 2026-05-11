@@ -3,8 +3,6 @@ from __future__ import annotations
 import json
 import sys
 import types
-from pathlib import Path
-
 import pytest
 from PIL import Image
 
@@ -201,3 +199,30 @@ def test_json_shape_for_forbidden_symbols() -> None:
     restored = json.loads(json.dumps(payload))
     assert restored["details"]["detections"][0]["bbox_xyxy"] == [1.0, 2.0, 3.0, 4.0]
     assert restored["scores"]["forbidden_symbols_detection_count"] == 0.0
+
+
+def test_forbidden_symbols_model_path_resolution_accepts_project_relative(monkeypatch, tmp_path) -> None:
+    model = tmp_path / "rel_model.pt"
+    model.write_bytes(b"not a model pointer" * 200)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_MODEL", "rel_model.pt")
+    from modimg.engines.forbidden_symbols_yolo import _resolve_model_path
+
+    assert _resolve_model_path() == model.resolve()
+
+
+def test_forbidden_symbols_engine_max_frames_zero_skips_inference(monkeypatch, tmp_path) -> None:
+    model = tmp_path / "model.pt"
+    model.write_bytes(b"not a model pointer" * 200)
+    FakeYOLO.confidence = 0.93
+    fake_module = types.SimpleNamespace(YOLO=FakeYOLO)
+    monkeypatch.setitem(sys.modules, "ultralytics", fake_module)
+    monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_ENABLE", "1")
+    monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_MODEL", str(model))
+    monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_MAX_FRAMES", "0")
+
+    result = YOLOForbiddenSymbolsEngine().execute("dummy.png", _frame())
+
+    assert result.status == EngineStatus.OK
+    assert result.details["max_frames"] == 0
+    assert result.scores["forbidden_symbols_detection_count"] == 0.0

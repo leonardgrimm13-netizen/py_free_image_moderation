@@ -4,6 +4,7 @@ import os
 import json
 from typing import Any, Dict, List, Optional, Tuple
 
+from ..enums import EngineStatus
 from ..types import Engine, EngineResult, Frame, mk_skipped
 from ..utils import now_ms
 
@@ -72,15 +73,15 @@ class SightengineEngine(Engine):
         start = now_ms()
         ok, why = self.available()
         if not ok:
-            return EngineResult(name=self.name, status="skipped", error=why, took_ms=now_ms() - start)
+            return EngineResult(name=self.name, status=EngineStatus.SKIPPED, error=why, took_ms=now_ms() - start)
 
         try:
             import requests  # type: ignore
         except Exception as e:
-            return EngineResult(name=self.name, status="skipped", error=f"missing dependency (pip install -U requests): {e}", took_ms=now_ms() - start)
+            return EngineResult(name=self.name, status=EngineStatus.SKIPPED, error=f"missing dependency (pip install -U requests): {e}", took_ms=now_ms() - start)
 
         if not frames:
-            return EngineResult(name=self.name, status="skipped", error="no frames", took_ms=now_ms() - start)
+            return EngineResult(name=self.name, status=EngineStatus.SKIPPED, error="no frames", took_ms=now_ms() - start)
 
         try:
             limit = max(1, int(max_api_frames or 1))
@@ -258,14 +259,19 @@ class SightengineEngine(Engine):
             if r.status_code in (402, 403, 429):
                 self.disable(f"quota/limit http={r.status_code}")
                 return mk_skipped(self, self.disabled_reason or "quota/limit", took_ms=now_ms() - start)
+            if r.status_code >= 400:
+                return EngineResult(name=self.name, status=EngineStatus.ERROR, error=f"http error {r.status_code}", took_ms=now_ms() - start)
 
-            data = r.json() if "application/json" in r.headers.get("content-type", "") else json.loads(r.text or "{}")
+            try:
+                data = r.json() if "application/json" in r.headers.get("content-type", "") else json.loads(r.text or "{}")
+            except Exception as exc:
+                return EngineResult(name=self.name, status=EngineStatus.ERROR, error=f"invalid JSON response: {type(exc).__name__}: {exc}", took_ms=now_ms() - start)
             if data.get("status") != "success":
                 err = data.get("error") or data.get("message") or str(data)
                 if "quota" in str(err).lower() or "limit" in str(err).lower():
                     self.disable(f"quota/limit: {str(err)[:200]}")
                     return mk_skipped(self, self.disabled_reason or "quota/limit", took_ms=now_ms() - start)
-                return EngineResult(name=self.name, status="error", error=str(err)[:400], details={"raw": data}, took_ms=now_ms() - start)
+                return EngineResult(name=self.name, status=EngineStatus.ERROR, error=str(err)[:400], details={"raw": data}, took_ms=now_ms() - start)
 
             sc = _extract_scores(data)
             per_frame.append({"frame": int(fr.idx), "scores": sc})
@@ -275,7 +281,7 @@ class SightengineEngine(Engine):
 
         return EngineResult(
             name=self.name,
-            status="ok",
+            status=EngineStatus.OK,
             scores={k: float(v) for k, v in best_scores.items()},
             details={"per_frame": per_frame, "frames_used": [int(fr.idx) for fr in use_frames], "models": self.models},
             took_ms=now_ms() - start,

@@ -4,8 +4,9 @@ import os
 from typing import Any, Dict, List, Tuple
 
 
+from ..enums import EngineStatus
 from ..types import Engine, EngineResult, Frame
-from ..utils import env_int, now_ms, safe_float01
+from ..utils import env_float, env_int, now_ms, safe_float01
 from ..config import project_root
 
 _YOLO_CACHE: Dict[Tuple[str, str], Any] = {}
@@ -58,7 +59,7 @@ class YOLOWorldWeaponsEngine(Engine):
         start = now_ms()
         ok, why = self.available()
         if not ok:
-            return EngineResult(name=self.name, status="skipped", error=why, took_ms=now_ms()-start)
+            return EngineResult(name=self.name, status=EngineStatus.SKIPPED, error=why, took_ms=now_ms()-start)
         model_name, explicit = _resolve_model_name()
         if model_name.strip().lower() in {"yolo-world", "yolo_world"}:
             explicit = False
@@ -68,14 +69,14 @@ class YOLOWorldWeaponsEngine(Engine):
             if not os.path.exists(default_model):
                 return EngineResult(
                     name=self.name,
-                    status="skipped",
+                    status=EngineStatus.SKIPPED,
                     error=f"missing default YOLO model path: {default_model}",
                     took_ms=now_ms() - start,
                 )
 
         mdl = _load_model()
-        conf = float(os.getenv("YOLO_CONF", "0.25").strip() or 0.25)
-        iou = float(os.getenv("YOLO_IOU", "0.45").strip() or 0.45)
+        conf = env_float("YOLO_CONF", 0.25, min_value=0.0, max_value=1.0)
+        iou = env_float("YOLO_IOU", 0.45, min_value=0.0, max_value=1.0)
         imgsz = env_int("YOLO_IMGSZ", 640)
         max_det = env_int("YOLO_MAX_DET", 50)
         device = os.getenv("YOLO_DEVICE", "").strip() or None
@@ -137,7 +138,7 @@ class YOLOWorldWeaponsEngine(Engine):
 
         return EngineResult(
             name=self.name,
-            status="ok",
+            status=EngineStatus.OK,
             scores={
                 "yolo_firearm_realistic": safe_float01(firearm_real),
                 "yolo_firearm_toy": safe_float01(firearm_toy),

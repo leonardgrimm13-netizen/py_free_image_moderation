@@ -61,8 +61,8 @@ py_free_image_moderation/
 
 ### 1) Repository und venv
 ```bash
-git clone https://github.com/leonardgrimm13-netizen/free_image_moderation_TEST.git
-cd free_image_moderation_TEST
+git clone https://github.com/leonardgrimm13-netizen/py_free_image_moderation.git
+cd py_free_image_moderation
 
 python3 -m venv .venv
 source .venv/bin/activate
@@ -96,7 +96,16 @@ python3 -m pip install -r requirements_api.txt
 
 Enthält alles aus `requirements.txt` plus API-Clients:
 - `openai` (OpenAI-Moderation)
-- `sightengine` (Sightengine API)
+- `requests` (HTTP-Client für Sightengine)
+- `sightengine` (Sightengine-API-Paket, aus Kompatibilitätsgründen)
+
+Editable-Installationen nutzen dieselbe Trennung über Extras:
+```bash
+python3 -m pip install -e ".[dev]"      # Tests/Linting
+python3 -m pip install -e ".[local]"    # lokale Vision-Engines
+python3 -m pip install -e ".[api]"      # API-Engines
+python3 -m pip install -e ".[all]"      # lokale Vision- und API-Engines
+```
 
 ### 3) Dev/Test-Abhängigkeiten
 ```bash
@@ -108,7 +117,9 @@ Enthält z. B. `pytest` für lokale Testläufe.
 ### 4) Gebündeltes lokales YOLO-Modell
 Dieses Repository enthält `models/forbidden_symbols_yolo.pt` direkt als normale Repository-Datei.
 
-Das Modell wird lokal von der Engine `YOLO forbidden symbols` geladen. Zur Laufzeit werden kein Roboflow und keine externe API verwendet.
+Das Modell wird lokal von der Engine `YOLO forbidden symbols` geladen. Zur Laufzeit werden kein Roboflow und keine externe API verwendet. Falls die Datei fehlt, setze `FORBIDDEN_SYMBOLS_YOLO_MODEL` auf einen absoluten Pfad oder starte aus dem Projekt-Root. Falls Git-LFS nur eine Pointer-Datei statt echter Gewichte ausgecheckt hat, führe `git lfs pull` aus.
+
+Die separate Engine `YOLO-World weapons` ist optional. Standardmäßig sucht sie `.cache/ultralytics/weights/yolov8s-oiv7.pt` und meldet `SKIPPED`, wenn kein Modell vorhanden ist. Für eigene Waffen-Gewichte setze `YOLO_WEAPON_MODEL=/absoluter/oder/projektrelativer/pfad.pt` oder `YOLO_WORLD_MODEL=/absoluter/oder/projektrelativer/pfad.pt`.
 
 ### 5) Optionale System-Abhängigkeit für OCR
 Für OCR wird in der Regel eine lokale Tesseract-Installation benötigt:
@@ -217,6 +228,15 @@ PHASH_AUTO_ALLOW_APPEND=0
 PHASH_AUTO_BLOCK_APPEND=0
 # pHash-Auto-Lernen ist standardmäßig aus; erst nach Prüfung von Thresholds und False Positives aktivieren.
 
+# Optionales YOLO-World-Waffenmodell
+# Wenn leer und .cache/ultralytics/weights/yolov8s-oiv7.pt fehlt, wird die Engine übersprungen.
+YOLO_WEAPON_MODEL=
+YOLO_WORLD_MODEL=
+YOLO_CONF=0.25
+YOLO_IMGSZ=640
+YOLO_MAX_FRAMES=2
+YOLO_DEVICE=
+
 # Lokales YOLO-Modell für verbotene/schädliche Symbole
 FORBIDDEN_SYMBOLS_YOLO_ENABLE=1
 FORBIDDEN_SYMBOLS_YOLO_MODEL=models/forbidden_symbols_yolo.pt
@@ -241,6 +261,7 @@ Nützliche Schalter:
 - `MODIMG_LOG_LEVEL=DEBUG|INFO|WARNING|ERROR` für die zentrale Protokollierung
 - `MODIMG_PARALLEL_ENGINES=1` unabhängige Engines gleichzeitig ausführen (optional/experimentell; standardmäßig deaktiviert)
 - `NO_CHECKS_POLICY=review` steuert den Fallback, wenn keine Engine lief: `ok` = erlauben, `review` = sicherer Standard, `block` = strengster Modus
+- `YOLO_WEAPON_MODEL` oder `YOLO_WORLD_MODEL` verweist auf eigene YOLO-Waffen-Gewichte; ohne Gewichte wird die Waffen-Engine übersprungen, nicht als Fehler gewertet.
 
 
 ### Lokale YOLO-Konfiguration für verbotene Symbole
@@ -249,7 +270,8 @@ Nützliche Schalter:
 - `FORBIDDEN_SYMBOLS_YOLO_REVIEW_CONF=0.30` steuert, ab wann Funde das Urteil auf `REVIEW` anheben.
 - `FORBIDDEN_SYMBOLS_YOLO_BLOCK_CONF=0.90` steuert, ab wann Funde das Urteil auf `BLOCK` anheben.
 - Empfohlene Defaults: `conf=0.20`, `review=0.30`, `block=0.90`, `imgsz=960`.
-- Für schnellere CPU-Scans: `FORBIDDEN_SYMBOLS_YOLO_IMGSZ=640`, `FORBIDDEN_SYMBOLS_YOLO_MAX_FRAMES=1` und `FORBIDDEN_SYMBOLS_YOLO_DEVICE=cpu`.
+- `FORBIDDEN_SYMBOLS_YOLO_MAX_FRAMES<=0` deaktiviert die Frame-Inferenz dieser Engine und liefert ein OK-Ergebnis mit null Funden.
+- Für schnellere CPU-only-Scans: `SAMPLE_FRAMES=3`, `OCR_MAX_FRAMES=1`, `YOLO_IMGSZ=416`, `YOLO_MAX_FRAMES=1`, `YOLO_DEVICE=cpu`, `FORBIDDEN_SYMBOLS_YOLO_IMGSZ=640`, `FORBIDDEN_SYMBOLS_YOLO_MAX_FRAMES=1` und `FORBIDDEN_SYMBOLS_YOLO_DEVICE=cpu`.
 - Unzuverlässige Klassen können zur Laufzeit ignoriert werden, z. B. `FORBIDDEN_SYMBOLS_YOLO_IGNORE_LABELS=communism,antifa`.
 
 ---

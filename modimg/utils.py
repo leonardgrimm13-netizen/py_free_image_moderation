@@ -50,6 +50,37 @@ def env_bool(name: str, default: bool = False) -> bool:
         return False
     return default
 
+
+def env_float(name: str, default: float, *, min_value: float | None = None, max_value: float | None = None) -> float:
+    """Read a float from env, returning default on missing/invalid values.
+
+    Optional min/max bounds clamp the parsed value.
+    """
+    raw = os.getenv(name)
+    try:
+        value = float(str(raw).strip()) if raw is not None and str(raw).strip() != "" else float(default)
+    except Exception:
+        value = float(default)
+    if not math.isfinite(value):
+        value = float(default)
+    if min_value is not None:
+        value = max(float(min_value), value)
+    if max_value is not None:
+        value = min(float(max_value), value)
+    return value
+
+
+def env_label_set(name: str, default: str = "") -> set[str]:
+    """Read a comma-separated env var as a normalized lowercase label set."""
+    raw = os.getenv(name, default) or default
+    return {x.strip().lower() for x in str(raw).split(",") if x.strip()}
+
+
+def status_value(status: Any) -> str:
+    """Return a lowercase engine status string for enums and legacy strings."""
+    return str(status.value if hasattr(status, "value") else status).lower()
+
+
 def safe_float01(v: Any, default: float = 0.0) -> float:
     """Convert to float in [0,1]. NaN/inf/invalid -> default."""
     try:
