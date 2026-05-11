@@ -1,50 +1,88 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-
-from ..types import Engine, EngineResult, Frame
-from ..utils import env_int, now_ms, safe_float01
 from ..config import project_root
+from ..enums import EngineStatus
+from ..types import Engine, EngineResult, Frame
+from ..utils import env_float, env_int, now_ms, safe_float01
 
 _YOLO_CACHE: Dict[Tuple[str, str], Any] = {}
+_PLACEHOLDER_NAMES = {"yolo-world", "yolo_world"}
 
-def _resolve_model_name() -> Tuple[str, bool]:
+
+def _configured_model_name() -> Tuple[str, bool]:
     model_name = (
         os.getenv("YOLO_WORLD_MODEL", "").strip()
         or os.getenv("YOLO_WEAPON_MODEL", "").strip()
         or os.getenv("YOLO_WEAPONS_WEIGHTS", "").strip()
     )
-    explicit = bool(model_name)
-    return model_name, explicit
+    if model_name.strip().lower() in _PLACEHOLDER_NAMES:
+        return "", False
+    return model_name, bool(model_name)
 
 
 def _default_model_path() -> str:
     return os.path.join(project_root(), ".cache", "ultralytics", "weights", "yolov8s-oiv7.pt")
 
 
-def _load_model() -> Any:
+def _looks_like_path(model_name: str) -> bool:
+    p = Path(model_name).expanduser()
+    return p.is_absolute() or any(sep in model_name for sep in ("/", "\\")) or model_name.startswith(".")
+
+
+def _candidate_model_paths(model_name: str) -> list[Path]:
+    p = Path(model_name).expanduser()
+    if p.is_absolute():
+        return [p]
+    candidates = [Path(project_root()) / p, Path.cwd() / p]
+    out: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate.resolve(strict=False))
+        if key not in seen:
+            seen.add(key)
+            out.append(candidate)
+    return out
+
+
+def _resolve_model_reference() -> Tuple[str, bool, str | None]:
+    """Return (model reference for Ultralytics, explicit, skip reason)."""
+    configured, explicit = _configured_model_name()
+    if explicit:
+        candidates = _candidate_model_paths(configured)
+        for candidate in candidates:
+            if candidate.exists():
+                return str(candidate.resolve()), True, None
+        if _looks_like_path(configured):
+            searched = ", ".join(str(c.resolve(strict=False)) for c in candidates)
+            return configured, True, f"explicit YOLO weapons model path not found: {configured} (searched: {searched})"
+        # Bare names such as yolov8n.pt are valid Ultralytics model names; keep them working.
+        return configured, True, None
+
+    default_model = Path(_default_model_path())
+    if not default_model.exists():
+        return str(default_model), False, f"missing default YOLO model path: {default_model}"
+    return str(default_model.resolve()), False, None
+
+
+def _load_model(model_ref: str) -> Any:
     backend = os.getenv("YOLO_BACKEND", "ultralytics").strip().lower()
-    # Keep a simple cache key; backend kept for future
-    model_name, _ = _resolve_model_name()
-    # Safety: older templates accidentally used the literal string "yolo-world"
-    # as a placeholder. Ultralytics' YOLO() expects a valid model name/path.
-    # Treat that placeholder as "unset" and fall back to our default weights.
-    if model_name.strip().lower() in {"yolo-world", "yolo_world"}:
-        model_name = ""
-    if not model_name:
-        model_name = _default_model_path()
-    key = (backend, model_name)
+    key = (backend, model_ref)
     if key in _YOLO_CACHE:
         return _YOLO_CACHE[key]
     from ultralytics import YOLO  # heavy import
-    mdl = YOLO(model_name)
+
+    mdl = YOLO(model_ref)
     _YOLO_CACHE[key] = mdl
     return mdl
 
+
 class YOLOWorldWeaponsEngine(Engine):
     """Offline weapon detection via Ultralytics YOLO weights (optional)."""
+
     name = "YOLO-World weapons"
 
     def available(self):
@@ -56,26 +94,23 @@ class YOLOWorldWeaponsEngine(Engine):
 
     def run(self, path: str, frames: List[Frame], max_api_frames: int = 2) -> EngineResult:
         start = now_ms()
+        model_ref, explicit, skip_reason = _resolve_model_reference()
+        if skip_reason is not None:
+            return EngineResult(
+                name=self.name,
+                status=EngineStatus.SKIPPED,
+                error=skip_reason,
+                details={"model": model_ref, "explicit_model": explicit},
+                took_ms=now_ms() - start,
+            )
+
         ok, why = self.available()
         if not ok:
-            return EngineResult(name=self.name, status="skipped", error=why, took_ms=now_ms()-start)
-        model_name, explicit = _resolve_model_name()
-        if model_name.strip().lower() in {"yolo-world", "yolo_world"}:
-            explicit = False
-            model_name = ""
-        if not explicit:
-            default_model = _default_model_path()
-            if not os.path.exists(default_model):
-                return EngineResult(
-                    name=self.name,
-                    status="skipped",
-                    error=f"missing default YOLO model path: {default_model}",
-                    took_ms=now_ms() - start,
-                )
+            return EngineResult(name=self.name, status=EngineStatus.SKIPPED, error=why, details={"model": model_ref}, took_ms=now_ms() - start)
 
-        mdl = _load_model()
-        conf = float(os.getenv("YOLO_CONF", "0.25").strip() or 0.25)
-        iou = float(os.getenv("YOLO_IOU", "0.45").strip() or 0.45)
+        mdl = _load_model(model_ref)
+        conf = env_float("YOLO_CONF", 0.25, min_value=0.0, max_value=1.0)
+        iou = env_float("YOLO_IOU", 0.45, min_value=0.0, max_value=1.0)
         imgsz = env_int("YOLO_IMGSZ", 640)
         max_det = env_int("YOLO_MAX_DET", 50)
         device = os.getenv("YOLO_DEVICE", "").strip() or None
@@ -95,11 +130,9 @@ class YOLOWorldWeaponsEngine(Engine):
             return ""
 
         for fr in use:
-            # ultralytics accepts numpy arrays / PIL
             try:
                 res = mdl.predict(fr.pil, conf=conf, iou=iou, imgsz=imgsz, max_det=max_det, device=device, verbose=False)
             except TypeError:
-                # older versions: imgsz named img_size etc. fallback
                 res = mdl.predict(fr.pil, conf=conf, iou=iou, max_det=max_det, device=device, verbose=False)
 
             if not res:
@@ -122,7 +155,6 @@ class YOLOWorldWeaponsEngine(Engine):
             for cid, cprob in zip(cls_list, conf_list):
                 nm = _name_for(int(cid)).lower()
                 p = float(cprob)
-                # very loose name matching for OpenImages weights
                 if "firearm" in nm or "gun" in nm or "rifle" in nm or "pistol" in nm:
                     firearm = max(firearm, p)
                     firearm_real = max(firearm_real, p)
@@ -130,14 +162,13 @@ class YOLOWorldWeaponsEngine(Engine):
                     firearm_toy = max(firearm_toy, p)
                 if "knife" in nm or "dagger" in nm:
                     knife = max(knife, p)
-                    # dangerous-knife heuristic: treat high confidence as dangerous
                     knife_danger = max(knife_danger, p)
 
         firearm_any = max(firearm, firearm_real, firearm_toy)
 
         return EngineResult(
             name=self.name,
-            status="ok",
+            status=EngineStatus.OK,
             scores={
                 "yolo_firearm_realistic": safe_float01(firearm_real),
                 "yolo_firearm_toy": safe_float01(firearm_toy),
@@ -146,5 +177,6 @@ class YOLOWorldWeaponsEngine(Engine):
                 "yolo_knife_dangerous": safe_float01(knife_danger),
                 "yolo_firearm_any": safe_float01(firearm_any),
             },
-            took_ms=now_ms()-start,
+            details={"model": model_ref, "explicit_model": explicit},
+            took_ms=now_ms() - start,
         )

@@ -11,7 +11,7 @@ from .config import get_config, load_dotenv_candidates
 from .benchmark import collect_benchmark_item, format_benchmark_summary, summarize_benchmark
 from .logging_utils import get_logger
 from .pipeline import run_on_input
-from .utils import is_image_file, is_url
+from .utils import env_int, is_image_file, is_url
 
 LOGGER = get_logger("cli")
 
@@ -19,16 +19,6 @@ LOGGER = get_logger("cli")
 def _enum_value(v: Any) -> str:
     """Return Enum.value for serialization/output, fallback to str."""
     return str(v.value) if hasattr(v, "value") else str(v)
-
-
-def _env_int(name: str, default: int) -> int:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    try:
-        return int(str(raw).strip())
-    except Exception:
-        return default
 
 
 def _select_scores(engine_name: str, scores: Dict[str, Any]) -> List[tuple[str, float]]:
@@ -60,7 +50,7 @@ def _select_scores(engine_name: str, scores: Dict[str, Any]) -> List[tuple[str, 
             "nudity_safe", "nudity_raw", "nudity_partial", "weapon_firearm", "weapon_firearm_toy", "weapon_knife", "gore_prob", "violence_prob", "offensive_max",
         ]
         items = [(k, float(scores[k])) for k in preferred if k in scores and isinstance(scores[k], (float, int))]
-        extra_topk = _env_int("SIGHTENGINE_EXTRA_TOPK", 0)
+        extra_topk = env_int("SIGHTENGINE_EXTRA_TOPK", 0)
         if extra_topk > 0:
             rest = sorted(
                 [(k, float(v)) for k, v in scores.items() if k not in preferred and isinstance(v, (float, int))],
@@ -70,7 +60,7 @@ def _select_scores(engine_name: str, scores: Dict[str, Any]) -> List[tuple[str, 
             items.extend([(k, v) for k, v in rest[:extra_topk] if v >= 0.05])
         return items
 
-    max_keys = _env_int("SCORE_MAX_KEYS", 8)
+    max_keys = env_int("SCORE_MAX_KEYS", 8)
     rest = sorted([(k, float(v)) for k, v in scores.items() if isinstance(v, (float, int))], key=lambda kv: kv[1], reverse=True)
     return rest[:max_keys]
 

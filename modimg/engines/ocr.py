@@ -5,6 +5,7 @@ import re
 from typing import List, Tuple
 
 
+from ..enums import EngineStatus
 from ..types import Engine, EngineResult, Frame
 from ..utils import env_int, now_ms
 from ..config import project_root
@@ -60,7 +61,7 @@ class OCREngine(Engine):
         start = now_ms()
         ok, why = self.available()
         if not ok:
-            return EngineResult(name=self.name, status="skipped", error=why, took_ms=now_ms()-start)
+            return EngineResult(name=self.name, status=EngineStatus.SKIPPED, error=why, took_ms=now_ms()-start)
 
         import pytesseract
         # optional custom tesseract path
@@ -74,7 +75,7 @@ class OCREngine(Engine):
 
         patterns = self._load_patterns()
         if not patterns:
-            return EngineResult(name=self.name, status="skipped", error="ocr blocklist empty", took_ms=now_ms()-start)
+            return EngineResult(name=self.name, status=EngineStatus.SKIPPED, error="ocr blocklist empty", took_ms=now_ms()-start)
 
         text_all: List[str] = []
         use = frames[:max_frames] if max_frames > 0 else frames[:1]
@@ -88,7 +89,7 @@ class OCREngine(Engine):
 
         joined = "\n".join(text_all).strip()
         if len(joined) < min_len:
-            return EngineResult(name=self.name, status="ok", scores={"ocr_match": 0.0}, details={"text": ""}, took_ms=now_ms()-start)
+            return EngineResult(name=self.name, status=EngineStatus.OK, scores={"ocr_match": 0.0}, details={"text": ""}, took_ms=now_ms()-start)
 
         hit = None
         for pat in patterns:
@@ -99,7 +100,7 @@ class OCREngine(Engine):
 
         return EngineResult(
             name=self.name,
-            status="ok",
+            status=EngineStatus.OK,
             scores={"ocr_match": 1.0 if hit else 0.0},
             details={"hit": hit, "text": joined[:2000]},
             took_ms=now_ms()-start,

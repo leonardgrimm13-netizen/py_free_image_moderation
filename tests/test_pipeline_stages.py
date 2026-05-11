@@ -236,3 +236,27 @@ def test_auto_learn_uses_final_api_verdict(monkeypatch, tmp_path) -> None:
     assert learn_labels[0] == VerdictLabel.BLOCK
     assert out["auto_learn"] == "learned"
     assert out["verdict"].label == VerdictLabel.BLOCK
+
+
+def test_run_on_input_cleans_downloaded_temp_file_on_engine_error(monkeypatch, tmp_path) -> None:
+    img = _mk_img(tmp_path)
+    temp_download = tmp_path / "downloaded.png"
+    Path(img).replace(temp_download)
+    seen = {"exists_during_engine": False}
+
+    class FailingEngine(FakeEngine):
+        def run(self, path, frames, max_api_frames=3):
+            seen["exists_during_engine"] = Path(path).exists()
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr("modimg.pipeline.is_url", lambda value: True)
+    monkeypatch.setattr("modimg.pipeline.download_url_to_temp", lambda value: (str(temp_download), "downloaded.png"))
+    monkeypatch.setattr("modimg.pipeline.build_pre_engines", lambda **kwargs: [])
+    monkeypatch.setattr("modimg.pipeline.build_local_engines", lambda **kwargs: [FailingEngine("failing")])
+    monkeypatch.setattr("modimg.pipeline.build_api_engines", lambda **kwargs: [])
+
+    out = run_on_input("https://example.test/image.png", no_apis=True)
+
+    assert seen["exists_during_engine"] is True
+    assert temp_download.exists() is False
+    assert out["results"][0].status == EngineStatus.ERROR

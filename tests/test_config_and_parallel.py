@@ -10,7 +10,7 @@ from modimg.config import get_config
 from modimg.pipeline import maybe_auto_learn, run_engines
 from modimg.types import Engine, EngineResult
 from modimg.verdict import compute_verdict
-from modimg.enums import VerdictLabel
+from modimg.enums import EngineStatus, VerdictLabel
 from modimg.types import Frame, Verdict
 
 
@@ -130,3 +130,32 @@ def test_no_checks_policy_block(monkeypatch) -> None:
     verdict = compute_verdict([EngineResult(name="OpenNSFW2", status="skipped", error="disabled")])
     assert verdict.label == VerdictLabel.BLOCK
     assert "No checks ran (all engines skipped/disabled)." in verdict.reasons
+
+
+def test_compute_verdict_accepts_enum_and_legacy_string_statuses(monkeypatch) -> None:
+    monkeypatch.setenv("FINAL_BLOCK_THRESHOLD", "0.85")
+    get_config(reload=True)
+    enum_verdict = compute_verdict([EngineResult(name="OpenNSFW2", status=EngineStatus.OK, scores={"nsfw_probability": 0.90})])
+    string_verdict = compute_verdict([EngineResult(name="OpenNSFW2", status="ok", scores={"nsfw_probability": 0.90})])
+
+    assert enum_verdict.label == string_verdict.label == VerdictLabel.BLOCK
+
+
+def test_compute_verdict_core_error_policy_values(monkeypatch) -> None:
+    result = EngineResult(name="OCR text", status=EngineStatus.ERROR, error="boom")
+
+    monkeypatch.setenv("ENGINE_ERROR_POLICY", "ignore")
+    assert compute_verdict([result]).label == VerdictLabel.REVIEW  # no successful checks fallback still applies
+
+    monkeypatch.setenv("ENGINE_ERROR_POLICY", "review")
+    assert compute_verdict([result]).label == VerdictLabel.REVIEW
+
+    monkeypatch.setenv("ENGINE_ERROR_POLICY", "block")
+    assert compute_verdict([result]).label == VerdictLabel.BLOCK
+
+
+def test_compute_verdict_specific_rules(monkeypatch) -> None:
+    assert compute_verdict([EngineResult(name="pHash allowlist", status="ok", scores={"phash_allow_match": 1.0})]).label == VerdictLabel.OK
+    assert compute_verdict([EngineResult(name="pHash blocklist", status="ok", scores={"phash_block_match": 1.0})]).label == VerdictLabel.BLOCK
+    assert compute_verdict([EngineResult(name="OCR text", status="ok", scores={"ocr_match": 1.0})]).label == VerdictLabel.BLOCK
+    assert compute_verdict([EngineResult(name="OpenAI Moderation", status="ok", scores={"sexual/minors": 0.02})]).label == VerdictLabel.BLOCK

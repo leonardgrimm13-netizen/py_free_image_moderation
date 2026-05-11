@@ -4,6 +4,7 @@ import os
 from typing import Any, List, Tuple, Optional
 from PIL import Image
 
+from ..enums import EngineStatus
 from ..types import Engine, EngineResult
 from ..utils import now_ms
 
@@ -18,7 +19,7 @@ class NudeNetEngine(Engine):
             return False, "disabled via NUDENET_DISABLE=1"
         try:
             from nudenet import NudeDetector  # noqa: F401
-            return True, "ok"
+            return True, EngineStatus.OK.value
         except Exception as e:
             return False, f"nudenet not available: {type(e).__name__}"
 
@@ -56,7 +57,7 @@ class NudeNetEngine(Engine):
 
         return EngineResult(
             name=self.name,
-            status="ok",
+            status=EngineStatus.OK,
             scores={
                 "nudity_exposed": float(max(0.0, min(1.0, exposed_max))),
                 "nudity_covered": float(max(0.0, min(1.0, covered_max))),

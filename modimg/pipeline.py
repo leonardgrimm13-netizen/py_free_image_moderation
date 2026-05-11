@@ -10,7 +10,7 @@ from .config import get_config
 from .enums import EngineStatus, VerdictLabel
 from .logging_utils import get_logger
 from .types import Engine, EngineResult, Verdict, Frame
-from .utils import is_url, download_url_to_temp
+from .utils import is_url, download_url_to_temp, status_value
 from .frames import load_frames
 from .verdict import compute_verdict
 from .phash import (
@@ -92,7 +92,7 @@ def _short_circuit_from_phash(results: List[EngineResult]) -> Optional[Verdict]:
     block: Optional[Verdict] = None
     allow: Optional[Verdict] = None
     for r in results:
-        if r.status != EngineStatus.OK:
+        if status_value(r.status) != EngineStatus.OK.value:
             continue
         if r.name == "pHash blocklist" and r.scores.get("phash_block_match") == 1.0:
             block = Verdict(VerdictLabel.BLOCK, 1.0, 1.0, 1.0, [f"Blocklist match (distance={r.details.get('distance')})"])
@@ -153,61 +153,59 @@ def run_on_input(inp: str, *, no_apis: bool = False, sample_frames: int = 12) ->
     display_name = inp
 
     try:
-        if is_url(inp):
-            tmp_path, display_name = download_url_to_temp(inp)
-            path = tmp_path
+        try:
+            if is_url(inp):
+                tmp_path, display_name = download_url_to_temp(inp)
+                path = tmp_path
+            else:
+                path = inp
+
+            frames = load_frames(path, sample_frames=sample_frames)
+        except Exception as e:
+            v = Verdict(VerdictLabel.REVIEW, 0.0, 0.0, 0.0, [f"loader_failure: {type(e).__name__}: {e}"])
+            return {
+                "name": display_name,
+                "path": inp,
+                "verdict": v,
+                "results": [EngineResult(name="Loader", status=EngineStatus.ERROR, error=f"failed to load image: {type(e).__name__}: {e}")],
+                "auto_learn": "",
+            }
+
+        pre_results = run_engines(path, frames, build_pre_engines(no_apis=no_apis))
+        sc = _short_circuit_from_phash(pre_results)
+
+        cfg = get_config()
+        if sc is not None and cfg.short_circuit_phash:
+            results = pre_results
+            v = sc
         else:
-            path = inp
+            local_results = run_engines(path, frames, build_local_engines(no_apis=no_apis))
+            local_with_pre = pre_results + local_results
+            local_verdict = compute_verdict(local_with_pre)
 
-        frames = load_frames(path, sample_frames=sample_frames)
-    except Exception as e:
-        if tmp_path:
-            Path(tmp_path).unlink(missing_ok=True)
-        v = Verdict(VerdictLabel.REVIEW, 0.0, 0.0, 0.0, [f"loader_failure: {type(e).__name__}: {e}"])
-        return {
-            "name": display_name,
-            "path": inp,
-            "verdict": v,
-            "results": [EngineResult(name="Loader", status=EngineStatus.ERROR, error=f"failed to load image: {type(e).__name__}: {e}")],
-            "auto_learn": "",
-        }
-
-    pre_results = run_engines(path, frames, build_pre_engines(no_apis=no_apis))
-    sc = _short_circuit_from_phash(pre_results)
-
-    cfg = get_config()
-    if sc is not None and cfg.short_circuit_phash:
-        results = pre_results
-        v = sc
-    else:
-        local_results = run_engines(path, frames, build_local_engines(no_apis=no_apis))
-        local_with_pre = pre_results + local_results
-        local_verdict = compute_verdict(local_with_pre)
-
-        should_run_apis = False
-        if (not no_apis) and cfg.api_policy != "never":
-            api_engines = build_api_engines(no_apis=no_apis)
-            if cfg.api_policy == "always":
-                should_run_apis = len(api_engines) > 0
-            elif cfg.api_policy == "on_review":
-                label = local_verdict.label
-                should_run_apis = len(api_engines) > 0 and (
-                    label == VerdictLabel.REVIEW or str(label).upper() == VerdictLabel.REVIEW.value
-                )
-            if should_run_apis:
-                api_results = run_engines(path, frames, api_engines)
-                results = local_with_pre + api_results
-                v = compute_verdict(results)
+            should_run_apis = False
+            if (not no_apis) and cfg.api_policy != "never":
+                api_engines = build_api_engines(no_apis=no_apis)
+                if cfg.api_policy == "always":
+                    should_run_apis = len(api_engines) > 0
+                elif cfg.api_policy == "on_review":
+                    label = local_verdict.label
+                    should_run_apis = len(api_engines) > 0 and (
+                        label == VerdictLabel.REVIEW or str(label).upper() == VerdictLabel.REVIEW.value
+                    )
+                if should_run_apis:
+                    api_results = run_engines(path, frames, api_engines)
+                    results = local_with_pre + api_results
+                    v = compute_verdict(results)
+                else:
+                    results = local_with_pre
+                    v = local_verdict
             else:
                 results = local_with_pre
                 v = local_verdict
-        else:
-            results = local_with_pre
-            v = local_verdict
 
-    learn_msg = maybe_auto_learn(v, frames)
-
-    if tmp_path:
-        Path(tmp_path).unlink(missing_ok=True)
-
-    return {"name": display_name, "path": inp, "verdict": v, "results": results, "auto_learn": learn_msg}
+        learn_msg = maybe_auto_learn(v, frames)
+        return {"name": display_name, "path": inp, "verdict": v, "results": results, "auto_learn": learn_msg}
+    finally:
+        if tmp_path:
+            Path(tmp_path).unlink(missing_ok=True)
