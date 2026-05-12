@@ -76,6 +76,37 @@ def env_label_set(name: str, default: str = "") -> set[str]:
     return {x.strip().lower() for x in str(raw).split(",") if x.strip()}
 
 
+def parse_label_thresholds(raw: str | None) -> dict[str, float]:
+    """Parse comma-separated ``label:threshold`` pairs into normalized thresholds.
+
+    Invalid entries are ignored. Threshold values are clamped into [0, 1],
+    matching ``safe_float01`` semantics for other moderation confidence values.
+    """
+    thresholds: dict[str, float] = {}
+    for entry in str(raw or "").split(","):
+        if ":" not in entry:
+            continue
+        label, value = entry.split(":", 1)
+        label = label.strip().lower()
+        value = value.strip()
+        if not label or not value:
+            continue
+        try:
+            parsed = float(value)
+        except Exception:
+            continue
+        if not math.isfinite(parsed):
+            continue
+        thresholds[label] = safe_float01(parsed)
+    return thresholds
+
+
+def env_label_thresholds(name: str, default: str = "") -> dict[str, float]:
+    """Read an env var as normalized ``label:threshold`` confidence overrides."""
+    raw = os.getenv(name, default) or default
+    return parse_label_thresholds(raw)
+
+
 def status_value(status: Any) -> str:
     """Return a lowercase engine status string for enums and legacy strings."""
     return str(status.value if hasattr(status, "value") else status).lower()

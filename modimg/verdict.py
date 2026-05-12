@@ -7,7 +7,7 @@ from typing import List, Optional
 from .config import get_config
 from .enums import EngineStatus, VerdictLabel
 from .types import EngineResult, Verdict
-from .utils import env_bool, env_float, safe_float01, status_value
+from .utils import env_bool, env_float, env_label_thresholds, safe_float01, status_value
 
 
 @dataclass
@@ -128,19 +128,61 @@ def _apply_nsfw(r: EngineResult, state: _VerdictState) -> None:
         state.bump("nudity", n, f"NSFWJS nsfw={n:.2f}", 0.50)
 
 
+def _detection_label_and_confidence(detection: object) -> tuple[str, float] | None:
+    if not isinstance(detection, dict):
+        return None
+    label = str(detection.get("label") or "").strip().lower()
+    if not label:
+        return None
+    return label, safe_float01(detection.get("confidence", 0.0))
+
+
 def _apply_forbidden_symbols(r: EngineResult, state: _VerdictState) -> None:
     if r.name != "YOLO forbidden symbols":
         return
-    max_conf = safe_float01((r.scores or {}).get("forbidden_symbols_max_conf", 0.0))
     block_conf = env_float("FORBIDDEN_SYMBOLS_YOLO_BLOCK_CONF", 0.90)
     review_conf = env_float("FORBIDDEN_SYMBOLS_YOLO_REVIEW_CONF", 0.30)
-    top_label = str((r.details or {}).get("top_label") or "").strip()
+    label_block_conf = env_label_thresholds("FORBIDDEN_SYMBOLS_YOLO_LABEL_BLOCK_CONF")
+    label_review_conf = env_label_thresholds("FORBIDDEN_SYMBOLS_YOLO_LABEL_REVIEW_CONF")
+    detections = (r.details or {}).get("detections")
+
+    if isinstance(detections, list):
+        block_hit: tuple[float, str, float] | None = None
+        review_hit: tuple[float, str, float] | None = None
+        for detection in detections:
+            parsed = _detection_label_and_confidence(detection)
+            if parsed is None:
+                continue
+            label, confidence = parsed
+            effective_block_conf = label_block_conf.get(label, block_conf)
+            effective_review_conf = label_review_conf.get(label, review_conf)
+            if confidence >= effective_block_conf:
+                if block_hit is None or confidence > block_hit[0]:
+                    block_hit = (confidence, label, effective_block_conf)
+            elif confidence >= effective_review_conf:
+                if review_hit is None or confidence > review_hit[0]:
+                    review_hit = (confidence, label, effective_review_conf)
+
+        if block_hit is not None:
+            confidence, label, threshold = block_hit
+            state.reasons.append(f"YOLO forbidden symbol detected: {label} confidence={confidence:.2f} threshold={threshold:.2f}")
+            state.hate = max(state.hate, 1.0)
+        elif review_hit is not None:
+            confidence, label, threshold = review_hit
+            state.reasons.append(f"YOLO possible forbidden symbol: {label} confidence={confidence:.2f} threshold={threshold:.2f}")
+            state.hate = max(state.hate, env_float("FINAL_REVIEW_THRESHOLD", 0.40))
+        return
+
+    max_conf = safe_float01((r.scores or {}).get("forbidden_symbols_max_conf", 0.0))
+    top_label = str((r.details or {}).get("top_label") or "").strip().lower()
+    effective_block_conf = label_block_conf.get(top_label, block_conf)
+    effective_review_conf = label_review_conf.get(top_label, review_conf)
     label_part = f": {top_label}" if top_label else ""
-    if max_conf >= block_conf:
-        state.reasons.append(f"YOLO forbidden symbol detected{label_part} confidence={max_conf:.2f}")
+    if max_conf >= effective_block_conf:
+        state.reasons.append(f"YOLO forbidden symbol detected{label_part} confidence={max_conf:.2f} threshold={effective_block_conf:.2f}")
         state.hate = max(state.hate, 1.0)
-    elif max_conf >= review_conf:
-        state.reasons.append(f"YOLO possible forbidden symbol{label_part} confidence={max_conf:.2f}")
+    elif max_conf >= effective_review_conf:
+        state.reasons.append(f"YOLO possible forbidden symbol{label_part} confidence={max_conf:.2f} threshold={effective_review_conf:.2f}")
         state.hate = max(state.hate, env_float("FINAL_REVIEW_THRESHOLD", 0.40))
 
 

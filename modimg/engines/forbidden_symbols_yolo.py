@@ -10,7 +10,7 @@ from typing import Any, Dict, List
 from ..config import project_root
 from ..enums import EngineStatus
 from ..types import Engine, EngineResult, Frame
-from ..utils import env_bool, env_float, env_int, env_label_set, now_ms, safe_float01
+from ..utils import env_bool, env_float, env_int, env_label_set, env_label_thresholds, now_ms, safe_float01
 
 _FORBIDDEN_SYMBOLS_YOLO_CACHE: Dict[str, Any] = {}
 
@@ -165,6 +165,8 @@ class YOLOForbiddenSymbolsEngine(Engine):
         max_frames = env_int("FORBIDDEN_SYMBOLS_YOLO_MAX_FRAMES", 2)
         review_conf = env_float("FORBIDDEN_SYMBOLS_YOLO_REVIEW_CONF", 0.30)
         block_conf = env_float("FORBIDDEN_SYMBOLS_YOLO_BLOCK_CONF", 0.90)
+        label_review_conf = env_label_thresholds("FORBIDDEN_SYMBOLS_YOLO_LABEL_REVIEW_CONF")
+        label_block_conf = env_label_thresholds("FORBIDDEN_SYMBOLS_YOLO_LABEL_BLOCK_CONF")
         if max_frames <= 0:
             return EngineResult(
                 name=self.name,
@@ -188,6 +190,8 @@ class YOLOForbiddenSymbolsEngine(Engine):
                     "max_frames": int(max_frames),
                     "review_conf": float(review_conf),
                     "block_conf": float(block_conf),
+                    "label_review_thresholds": label_review_conf,
+                    "label_block_thresholds": label_block_conf,
                     "detection_count": 0,
                     "top_label": "",
                     "top_confidence": 0.0,
@@ -261,6 +265,8 @@ class YOLOForbiddenSymbolsEngine(Engine):
         max_conf = max((float(d["confidence"]) for d in detections), default=0.0)
         top = max(detections, key=lambda d: float(d["confidence"])) if detections else None
         top_label = str(top.get("label", "")) if top else ""
+        review_hit = any(float(d["confidence"]) >= label_review_conf.get(str(d.get("label", "")).strip().lower(), review_conf) for d in detections)
+        block_hit = any(float(d["confidence"]) >= label_block_conf.get(str(d.get("label", "")).strip().lower(), block_conf) for d in detections)
 
         return EngineResult(
             name=self.name,
@@ -268,8 +274,8 @@ class YOLOForbiddenSymbolsEngine(Engine):
             scores={
                 "forbidden_symbols_detected": 1.0 if detections else 0.0,
                 "forbidden_symbols_max_conf": safe_float01(max_conf),
-                "forbidden_symbols_review_hit": 1.0 if max_conf >= review_conf else 0.0,
-                "forbidden_symbols_block_hit": 1.0 if max_conf >= block_conf else 0.0,
+                "forbidden_symbols_review_hit": 1.0 if review_hit else 0.0,
+                "forbidden_symbols_block_hit": 1.0 if block_hit else 0.0,
                 "forbidden_symbols_detection_count": float(len(detections)),
                 "forbidden_symbols_top_conf": safe_float01(max_conf),
             },
@@ -284,6 +290,8 @@ class YOLOForbiddenSymbolsEngine(Engine):
                 "max_frames": int(max_frames),
                 "review_conf": float(review_conf),
                 "block_conf": float(block_conf),
+                "label_review_thresholds": label_review_conf,
+                "label_block_thresholds": label_block_conf,
                 "device": device_raw,
                 "detection_count": len(detections),
                 "top_label": top_label,
