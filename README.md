@@ -247,6 +247,8 @@ FORBIDDEN_SYMBOLS_YOLO_MAX_FRAMES=2
 FORBIDDEN_SYMBOLS_YOLO_DEVICE=auto
 FORBIDDEN_SYMBOLS_YOLO_REVIEW_CONF=0.30
 FORBIDDEN_SYMBOLS_YOLO_BLOCK_CONF=0.90
+FORBIDDEN_SYMBOLS_YOLO_LABEL_REVIEW_CONF=isis:0.75,swastika:0.50
+FORBIDDEN_SYMBOLS_YOLO_LABEL_BLOCK_CONF=isis:0.92,swastika:0.90
 FORBIDDEN_SYMBOLS_YOLO_INCLUDE_BOXES=1
 FORBIDDEN_SYMBOLS_YOLO_IGNORE_LABELS=
 ```
@@ -268,6 +270,8 @@ Useful toggles:
 - `FORBIDDEN_SYMBOLS_YOLO_CONF=0.20` controls the raw YOLO detection confidence.
 - `FORBIDDEN_SYMBOLS_YOLO_REVIEW_CONF=0.30` controls when detections should push the verdict to `REVIEW`.
 - `FORBIDDEN_SYMBOLS_YOLO_BLOCK_CONF=0.90` controls when detections should push the verdict to `BLOCK`.
+- Label-specific thresholds can override the global verdict thresholds for named labels only, e.g. `FORBIDDEN_SYMBOLS_YOLO_LABEL_REVIEW_CONF=isis:0.75,swastika:0.50` and `FORBIDDEN_SYMBOLS_YOLO_LABEL_BLOCK_CONF=isis:0.92,swastika:0.90`. Labels not listed there keep using the global review/block thresholds.
+- Label-specific thresholds are safer than `FORBIDDEN_SYMBOLS_YOLO_IGNORE_LABELS=isis` for noisy classes: low-confidence ISIS false positives can be suppressed while genuine high-confidence ISIS detections still reach `REVIEW`/`BLOCK`.
 - Recommended defaults: `conf=0.20`, `review=0.30`, `block=0.90`, `imgsz=960`.
 - `FORBIDDEN_SYMBOLS_YOLO_MAX_FRAMES<=0` disables frame inference for this engine and returns an OK result with zero detections.
 - For faster CPU-only scans, try `SAMPLE_FRAMES=3`, `OCR_MAX_FRAMES=1`, `YOLO_IMGSZ=416`, `YOLO_MAX_FRAMES=1`, `YOLO_DEVICE=cpu`, `FORBIDDEN_SYMBOLS_YOLO_IMGSZ=640`, `FORBIDDEN_SYMBOLS_YOLO_MAX_FRAMES=1`, and `FORBIDDEN_SYMBOLS_YOLO_DEVICE=cpu`.

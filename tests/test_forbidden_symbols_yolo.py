@@ -10,6 +10,7 @@ from modimg.engines.forbidden_symbols_yolo import YOLOForbiddenSymbolsEngine, _F
 from modimg.enums import EngineStatus, VerdictLabel
 from modimg.pipeline import build_local_engines, build_pre_engines
 from modimg.types import EngineResult, Frame
+from modimg.utils import parse_label_thresholds
 from modimg.verdict import compute_verdict
 
 
@@ -20,6 +21,28 @@ def _frame() -> list[Frame]:
 @pytest.fixture(autouse=True)
 def _clean_cache() -> None:
     _FORBIDDEN_SYMBOLS_YOLO_CACHE.clear()
+
+
+def test_parse_label_thresholds_empty() -> None:
+    assert parse_label_thresholds("") == {}
+    assert parse_label_thresholds(None) == {}
+
+
+def test_parse_label_thresholds_basic_and_spaces() -> None:
+    assert parse_label_thresholds("isis:0.75,swastika:0.50") == {"isis": 0.75, "swastika": 0.50}
+    assert parse_label_thresholds("isis:0.75, swastika:0.50") == {"isis": 0.75, "swastika": 0.50}
+
+
+def test_parse_label_thresholds_case_insensitive_labels() -> None:
+    assert parse_label_thresholds("ISIS:0.75, SwAsTiKa:0.50") == {"isis": 0.75, "swastika": 0.50}
+
+
+def test_parse_label_thresholds_ignores_invalid_entries() -> None:
+    assert parse_label_thresholds("bad,label:notfloat,label:,:0.5,isis:0.75") == {"isis": 0.75}
+
+
+def test_parse_label_thresholds_clamps_out_of_range_values() -> None:
+    assert parse_label_thresholds("low:-0.5,high:1.5") == {"low": 0.0, "high": 1.0}
 
 
 def test_forbidden_symbols_engine_disabled(monkeypatch) -> None:
@@ -176,6 +199,88 @@ def test_verdict_forbidden_symbols_below_threshold(monkeypatch) -> None:
     verdict = compute_verdict([_yolo_result(0.10)])
     assert verdict.label == VerdictLabel.OK
     assert not verdict.reasons
+
+
+def _yolo_detection_result(label: str, confidence: float, *, include_detections: bool = True) -> EngineResult:
+    details = {"top_label": label, "top_confidence": confidence}
+    if include_detections:
+        details["detections"] = [{"label": label, "confidence": confidence}]
+    return EngineResult(
+        name="YOLO forbidden symbols",
+        status=EngineStatus.OK,
+        scores={"forbidden_symbols_max_conf": confidence},
+        details=details,
+    )
+
+
+def test_verdict_label_review_threshold_suppresses_isis_false_positive(monkeypatch) -> None:
+    monkeypatch.delenv("FORBIDDEN_SYMBOLS_YOLO_LABEL_REVIEW_CONF", raising=False)
+    monkeypatch.delenv("FORBIDDEN_SYMBOLS_YOLO_LABEL_BLOCK_CONF", raising=False)
+    monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_REVIEW_CONF", "0.30")
+    monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_BLOCK_CONF", "0.90")
+    assert compute_verdict([_yolo_detection_result("isis", 0.55)]).label == VerdictLabel.REVIEW
+
+    monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_LABEL_REVIEW_CONF", "isis:0.75")
+    verdict = compute_verdict([_yolo_detection_result("isis", 0.55)])
+
+    assert verdict.label == VerdictLabel.OK
+    assert not verdict.reasons
+
+
+def test_verdict_label_review_threshold_allows_higher_isis_detection(monkeypatch) -> None:
+    monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_REVIEW_CONF", "0.30")
+    monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_BLOCK_CONF", "0.90")
+    monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_LABEL_REVIEW_CONF", "isis:0.75")
+
+    verdict = compute_verdict([_yolo_detection_result("isis", 0.80)])
+
+    assert verdict.label == VerdictLabel.REVIEW
+    assert any("isis confidence=0.80 threshold=0.75" in reason for reason in verdict.reasons)
+
+
+def test_verdict_label_block_threshold_blocks_isis(monkeypatch) -> None:
+    monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_REVIEW_CONF", "0.30")
+    monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_BLOCK_CONF", "0.90")
+    monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_LABEL_REVIEW_CONF", "isis:0.75")
+    monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_LABEL_BLOCK_CONF", "isis:0.92")
+
+    verdict = compute_verdict([_yolo_detection_result("isis", 0.93)])
+
+    assert verdict.label == VerdictLabel.BLOCK
+    assert any("isis confidence=0.93 threshold=0.92" in reason for reason in verdict.reasons)
+
+
+def test_verdict_label_threshold_case_insensitive_and_swastika_specific(monkeypatch) -> None:
+    monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_REVIEW_CONF", "0.80")
+    monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_BLOCK_CONF", "0.95")
+    monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_LABEL_REVIEW_CONF", "SwAsTiKa:0.50")
+
+    verdict = compute_verdict([_yolo_detection_result("SWASTIKA", 0.60)])
+
+    assert verdict.label == VerdictLabel.REVIEW
+    assert any("swastika confidence=0.60 threshold=0.50" in reason for reason in verdict.reasons)
+
+
+def test_verdict_unconfigured_label_uses_global_threshold(monkeypatch) -> None:
+    monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_REVIEW_CONF", "0.30")
+    monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_BLOCK_CONF", "0.90")
+    monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_LABEL_REVIEW_CONF", "isis:0.75")
+
+    verdict = compute_verdict([_yolo_detection_result("other_symbol", 0.55)])
+
+    assert verdict.label == VerdictLabel.REVIEW
+    assert any("other_symbol confidence=0.55 threshold=0.30" in reason for reason in verdict.reasons)
+
+
+def test_verdict_fallback_without_detections_uses_top_label_threshold(monkeypatch) -> None:
+    monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_REVIEW_CONF", "0.30")
+    monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_BLOCK_CONF", "0.90")
+    monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_LABEL_REVIEW_CONF", "isis:0.75")
+
+    verdict = compute_verdict([_yolo_detection_result("isis", 0.80, include_detections=False)])
+
+    assert verdict.label == VerdictLabel.REVIEW
+    assert any("isis" in reason and "threshold=0.75" in reason for reason in verdict.reasons)
 
 
 def test_pipeline_includes_forbidden_symbols_engine() -> None:

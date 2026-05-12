@@ -248,6 +248,8 @@ FORBIDDEN_SYMBOLS_YOLO_MAX_FRAMES=2
 FORBIDDEN_SYMBOLS_YOLO_DEVICE=auto
 FORBIDDEN_SYMBOLS_YOLO_REVIEW_CONF=0.30
 FORBIDDEN_SYMBOLS_YOLO_BLOCK_CONF=0.90
+FORBIDDEN_SYMBOLS_YOLO_LABEL_REVIEW_CONF=isis:0.75,swastika:0.50
+FORBIDDEN_SYMBOLS_YOLO_LABEL_BLOCK_CONF=isis:0.92,swastika:0.90
 FORBIDDEN_SYMBOLS_YOLO_INCLUDE_BOXES=1
 FORBIDDEN_SYMBOLS_YOLO_IGNORE_LABELS=
 ```
@@ -269,6 +271,8 @@ Nützliche Schalter:
 - `FORBIDDEN_SYMBOLS_YOLO_CONF=0.20` steuert die rohe YOLO-Erkennungs-Confidence.
 - `FORBIDDEN_SYMBOLS_YOLO_REVIEW_CONF=0.30` steuert, ab wann Funde das Urteil auf `REVIEW` anheben.
 - `FORBIDDEN_SYMBOLS_YOLO_BLOCK_CONF=0.90` steuert, ab wann Funde das Urteil auf `BLOCK` anheben.
+- Label-spezifische Thresholds überschreiben die globalen Urteilsschwellen nur für das jeweilige Label, z. B. `FORBIDDEN_SYMBOLS_YOLO_LABEL_REVIEW_CONF=isis:0.75,swastika:0.50` und `FORBIDDEN_SYMBOLS_YOLO_LABEL_BLOCK_CONF=isis:0.92,swastika:0.90`. Nicht genannte Labels nutzen weiterhin die globalen Review-/Block-Werte.
+- Label-spezifische Thresholds sind sicherer als `FORBIDDEN_SYMBOLS_YOLO_IGNORE_LABELS=isis`: Low-Confidence-False-Positives können unterdrückt werden, echte High-Confidence-ISIS-Treffer erreichen aber weiterhin `REVIEW`/`BLOCK`.
 - Empfohlene Defaults: `conf=0.20`, `review=0.30`, `block=0.90`, `imgsz=960`.
 - `FORBIDDEN_SYMBOLS_YOLO_MAX_FRAMES<=0` deaktiviert die Frame-Inferenz dieser Engine und liefert ein OK-Ergebnis mit null Funden.
 - Für schnellere CPU-only-Scans: `SAMPLE_FRAMES=3`, `OCR_MAX_FRAMES=1`, `YOLO_IMGSZ=416`, `YOLO_MAX_FRAMES=1`, `YOLO_DEVICE=cpu`, `FORBIDDEN_SYMBOLS_YOLO_IMGSZ=640`, `FORBIDDEN_SYMBOLS_YOLO_MAX_FRAMES=1` und `FORBIDDEN_SYMBOLS_YOLO_DEVICE=cpu`.
