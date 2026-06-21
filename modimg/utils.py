@@ -196,3 +196,51 @@ def safe_model_dump(obj: Any) -> Any:
         return json.loads(json.dumps(obj, default=lambda o: getattr(o, "__dict__", str(o))))
     except Exception:
         return str(obj)
+
+
+def json_safe(value: Any) -> Any:
+    """Return a JSON-serializable representation of common runtime values.
+
+    Engine details can contain enums, dataclasses, pathlib paths, numpy scalar
+    values/arrays, or bytes from optional dependencies. Keep the report useful
+    without allowing one non-serializable detail to crash the CLI.
+    """
+    from dataclasses import asdict, is_dataclass
+    from pathlib import Path
+
+    if value is None or isinstance(value, (str, int, bool)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if hasattr(value, "value"):
+        return json_safe(value.value)
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, bytes):
+        return f"<bytes:{len(value)}>"
+    if is_dataclass(value):
+        return json_safe(asdict(value))
+    if isinstance(value, dict):
+        return {str(json_safe(k)): json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [json_safe(v) for v in value]
+    if hasattr(value, "item"):
+        try:
+            return json_safe(value.item())
+        except Exception:
+            pass
+    if hasattr(value, "tolist"):
+        try:
+            return json_safe(value.tolist())
+        except Exception:
+            pass
+    try:
+        json.dumps(value)
+        return value
+    except Exception:
+        return str(value)
+
+
+def json_dumps_safe(value: Any, **kwargs: Any) -> str:
+    """Dump JSON after normalizing values that stdlib json cannot encode."""
+    return json.dumps(json_safe(value), **kwargs)

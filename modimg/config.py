@@ -60,13 +60,19 @@ def load_dotenv(path: str, *, override: bool | None = None) -> list[str]:
 
 
 def load_dotenv_candidates() -> tuple[str | None, list[str]]:
-    """Try loading .env/.env.txt/.env.example in the project root."""
+    """Try loading a real dotenv file from the project root.
+
+    ``.env.example`` is intentionally not loaded as runtime defaults: it is
+    documentation and may contain placeholder credentials or heavier example
+    settings that should not silently affect imports, tests, or installed CLI
+    runs. Runtime defaults live in :class:`Config` and individual engine code.
+    """
     root = Path(__file__).resolve().parent.parent
-    candidates = [root / ".env", root / ".env.txt", root / ".env.example"]
+    candidates = [root / ".env", root / ".env.txt"]
 
     for candidate in candidates:
         if candidate.exists():
-            return str(candidate), load_dotenv(str(candidate), override=False if candidate.name == ".env.example" else None)
+            return str(candidate), load_dotenv(str(candidate))
     return None, []
 
 

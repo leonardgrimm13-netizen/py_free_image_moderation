@@ -159,3 +159,47 @@ def test_compute_verdict_specific_rules(monkeypatch) -> None:
     assert compute_verdict([EngineResult(name="pHash blocklist", status="ok", scores={"phash_block_match": 1.0})]).label == VerdictLabel.BLOCK
     assert compute_verdict([EngineResult(name="OCR text", status="ok", scores={"ocr_match": 1.0})]).label == VerdictLabel.BLOCK
     assert compute_verdict([EngineResult(name="OpenAI Moderation", status="ok", scores={"sexual/minors": 0.02})]).label == VerdictLabel.BLOCK
+
+
+def test_dotenv_example_is_not_loaded_as_runtime_defaults(monkeypatch) -> None:
+    from pathlib import Path
+
+    from modimg import config as config_mod
+
+    monkeypatch.setenv("DOTENV_OVERRIDE", "0")
+    monkeypatch.setenv("SAMPLE_FRAMES", "12")
+    monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_CONF", "sentinel-from-test")
+
+    path, keys = config_mod.load_dotenv_candidates()
+
+    assert path is None or Path(path).name in {".env", ".env.txt"}
+    assert path is None or Path(path).name != ".env.example"
+    assert "FORBIDDEN_SYMBOLS_YOLO_CONF" not in keys
+    assert config_mod.os.environ["FORBIDDEN_SYMBOLS_YOLO_CONF"] == "sentinel-from-test"
+    assert config_mod.get_config(reload=True).sample_frames == 12
+
+
+def test_json_safe_handles_paths_numpy_and_non_finite_values(tmp_path) -> None:
+    import math
+    import numpy as np
+
+    from modimg.utils import json_dumps_safe, json_safe
+
+    payload = {
+        "path": tmp_path / "x.png",
+        "np_int": np.int64(7),
+        "np_float": np.float32(0.25),
+        "np_array": np.array([1, 2, 3]),
+        "nan": float("nan"),
+        "bytes": b"secret-bytes",
+    }
+
+    normalized = json_safe(payload)
+    assert normalized["path"].endswith("x.png")
+    assert normalized["np_int"] == 7
+    assert normalized["np_array"] == [1, 2, 3]
+    assert normalized["nan"] is None
+    assert normalized["bytes"] == "<bytes:12>"
+    dumped = json_dumps_safe(payload, allow_nan=False)
+    assert "NaN" not in dumped
+    assert math.isclose(normalized["np_float"], 0.25, rel_tol=1e-6)
