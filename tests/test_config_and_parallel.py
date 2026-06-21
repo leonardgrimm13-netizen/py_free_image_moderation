@@ -162,13 +162,20 @@ def test_compute_verdict_specific_rules(monkeypatch) -> None:
 
 
 def test_dotenv_example_is_not_loaded_as_runtime_defaults(monkeypatch) -> None:
+    from pathlib import Path
+
     from modimg import config as config_mod
 
-    monkeypatch.delenv("FORBIDDEN_SYMBOLS_YOLO_CONF", raising=False)
+    monkeypatch.setenv("DOTENV_OVERRIDE", "0")
+    monkeypatch.setenv("SAMPLE_FRAMES", "12")
+    monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_CONF", "sentinel-from-test")
+
     path, keys = config_mod.load_dotenv_candidates()
 
-    assert path is None or not path.endswith(".env.example")
+    assert path is None or Path(path).name in {".env", ".env.txt"}
+    assert path is None or Path(path).name != ".env.example"
     assert "FORBIDDEN_SYMBOLS_YOLO_CONF" not in keys
+    assert config_mod.os.environ["FORBIDDEN_SYMBOLS_YOLO_CONF"] == "sentinel-from-test"
     assert config_mod.get_config(reload=True).sample_frames == 12
 
 
