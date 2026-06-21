@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import time
 from pathlib import Path
@@ -11,7 +10,7 @@ from .config import get_config, load_dotenv_candidates
 from .benchmark import collect_benchmark_item, format_benchmark_summary, summarize_benchmark
 from .logging_utils import get_logger
 from .pipeline import run_on_input
-from .utils import env_int, is_image_file, is_url
+from .utils import env_int, is_image_file, is_url, json_dumps_safe, json_safe
 
 LOGGER = get_logger("cli")
 
@@ -128,7 +127,7 @@ def main(argv: List[str] | None = None) -> int:
         LOGGER.error("%s", message)
         if args.json_out:
             Path(args.json_out).write_text(
-                json.dumps({"error": message, "results": []}, ensure_ascii=False, indent=2),
+                json_dumps_safe({"error": message, "results": []}, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
         return 2
@@ -145,22 +144,24 @@ def main(argv: List[str] | None = None) -> int:
             benchmark_items.append(collect_benchmark_item(rep, file_total_ms))
         _print_report(rep)
         reports.append(
-            {
-                "name": rep["name"],
-                "path": rep["path"],
-                "verdict": {
-                    **rep["verdict"].__dict__,
-                    "label": _enum_value(rep["verdict"].label),
-                },
-                "results": [
-                    {
-                        **r.__dict__,
-                        "status": _enum_value(r.status),
-                    }
-                    for r in rep["results"]
-                ],
-                "auto_learn": rep.get("auto_learn"),
-            }
+            json_safe(
+                {
+                    "name": rep["name"],
+                    "path": rep["path"],
+                    "verdict": {
+                        **rep["verdict"].__dict__,
+                        "label": _enum_value(rep["verdict"].label),
+                    },
+                    "results": [
+                        {
+                            **r.__dict__,
+                            "status": _enum_value(r.status),
+                        }
+                        for r in rep["results"]
+                    ],
+                    "auto_learn": rep.get("auto_learn"),
+                }
+            )
         )
 
     benchmark_summary = None
@@ -169,11 +170,11 @@ def main(argv: List[str] | None = None) -> int:
         benchmark_summary = summarize_benchmark(benchmark_items, total_wall_ms=processing_wall_ms)
 
     if args.json_out:
-        Path(args.json_out).write_text(json.dumps(reports if len(reports) > 1 else reports[0], ensure_ascii=False, indent=2), encoding="utf-8")
+        Path(args.json_out).write_text(json_dumps_safe(reports if len(reports) > 1 else reports[0], ensure_ascii=False, indent=2), encoding="utf-8")
     if benchmark_summary is not None and args.benchmark:
         LOGGER.info("%s", format_benchmark_summary(benchmark_summary))
     if benchmark_summary is not None and args.benchmark_json:
-        Path(args.benchmark_json).write_text(json.dumps(benchmark_summary, ensure_ascii=False, indent=2), encoding="utf-8")
+        Path(args.benchmark_json).write_text(json_dumps_safe(benchmark_summary, ensure_ascii=False, indent=2), encoding="utf-8")
 
     return 0 if all(r["verdict"]["label"] == "OK" for r in reports) else 2
 
