@@ -67,12 +67,19 @@ def _select_scores(engine_name: str, scores: Dict[str, Any]) -> List[tuple[str, 
 def _iter_paths(p: str, recursive: bool) -> List[str]:
     if is_url(p):
         return [p]
-    path = Path(p)
+    path = Path(p).expanduser()
     if path.is_dir():
         if recursive:
             return sorted(str(x) for x in path.rglob("*") if x.is_file() and is_image_file(str(x)))
         return sorted(str(x) for x in path.iterdir() if x.is_file() and is_image_file(str(x)))
     return [p]
+
+
+def _write_json_file(path: str, payload: Any) -> None:
+    out = Path(path).expanduser()
+    if out.parent != Path("."):
+        out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json_dumps_safe(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _print_report(rep: Dict[str, Any]) -> None:
@@ -126,10 +133,7 @@ def main(argv: List[str] | None = None) -> int:
         message = "No input images found."
         LOGGER.error("%s", message)
         if args.json_out:
-            Path(args.json_out).write_text(
-                json_dumps_safe({"error": message, "results": []}, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
+            _write_json_file(args.json_out, {"error": message, "results": []})
         return 2
 
     reports: List[Dict[str, Any]] = []
@@ -170,11 +174,11 @@ def main(argv: List[str] | None = None) -> int:
         benchmark_summary = summarize_benchmark(benchmark_items, total_wall_ms=processing_wall_ms)
 
     if args.json_out:
-        Path(args.json_out).write_text(json_dumps_safe(reports if len(reports) > 1 else reports[0], ensure_ascii=False, indent=2), encoding="utf-8")
+        _write_json_file(args.json_out, reports if len(reports) > 1 else reports[0])
     if benchmark_summary is not None and args.benchmark:
         LOGGER.info("%s", format_benchmark_summary(benchmark_summary))
     if benchmark_summary is not None and args.benchmark_json:
-        Path(args.benchmark_json).write_text(json_dumps_safe(benchmark_summary, ensure_ascii=False, indent=2), encoding="utf-8")
+        _write_json_file(args.benchmark_json, benchmark_summary)
 
     return 0 if all(r["verdict"]["label"] == "OK" for r in reports) else 2
 

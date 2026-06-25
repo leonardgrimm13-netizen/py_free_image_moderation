@@ -60,6 +60,7 @@ py_free_image_moderation/
 > Empfohlen: Python **3.11+** in einer virtuellen Umgebung.
 
 ### 1) Repository und venv
+Linux/macOS:
 ```bash
 git clone https://github.com/leonardgrimm13-netizen/py_free_image_moderation.git
 cd py_free_image_moderation
@@ -68,36 +69,66 @@ python3 -m venv .venv
 source .venv/bin/activate
 ```
 
-Windows-Aktivierung bei Bedarf: `.venv\Scripts\activate`.
+Windows PowerShell:
+```powershell
+git clone https://github.com/leonardgrimm13-netizen/py_free_image_moderation.git
+cd py_free_image_moderation
+
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+```
+
+Windows CMD:
+```bat
+git clone https://github.com/leonardgrimm13-netizen/py_free_image_moderation.git
+cd py_free_image_moderation
+
+py -3.11 -m venv .venv
+.venv\Scripts\activate.bat
+```
 
 ### 2) Installationsoptionen
 
-#### A) Offline/Lokal
+#### A) Basis/Core
 ```bash
 python3 -m pip install --upgrade pip
 python3 -m pip install -r requirements.txt
 ```
 
-Enthält die lokalen Laufzeit- und Engine-Abhängigkeiten (ohne API-Clients):
+Enthält nur die leichten Core-Abhängigkeiten:
 - `Pillow`
 - `numpy`
 - `ImageHash`
+
+Das reicht für Bildladen, GIF-Frame-Sampling, pHash-Allow/Blocklisten, JSON-Ausgabe und sauberes Überspringen optionaler Engines.
+
+#### B) Lokal/Vision
+```bash
+python3 -m pip install -r requirements_local.txt
+```
+
+Enthält die Basis-Abhängigkeiten plus lokale Vision/OCR-Engines:
 - `opennsfw2`
 - `nudenet`
 - `ultralytics`
 - `pytesseract`
 
-Damit funktioniert die lokale Pipeline inkl. pHash, lokaler YOLO-Erkennung für verbotene/schädliche Symbole und `--no-apis`.
+Damit funktioniert die lokale Pipeline inkl. OpenNSFW2, NudeNet, YOLO-Waffen, lokaler YOLO-Erkennung für verbotene/schädliche Symbole, OCR-Python-Bindings und `--no-apis`.
 
-#### B) Mit APIs
+#### C) Mit APIs
 ```bash
 python3 -m pip install -r requirements_api.txt
 ```
 
-Enthält alles aus `requirements.txt` plus API-Clients:
+Enthält die Basis-Abhängigkeiten plus API-Clients:
 - `openai` (OpenAI-Moderation)
 - `requests` (HTTP-Client für Sightengine)
 - `sightengine` (Sightengine-API-Paket, aus Kompatibilitätsgründen)
+
+#### D) Alle Runtime-Engines
+```bash
+python3 -m pip install -r requirements_all.txt
+```
 
 Editable-Installationen nutzen dieselbe Trennung über Extras:
 ```bash
@@ -112,7 +143,7 @@ python3 -m pip install -e ".[all]"      # lokale Vision- und API-Engines
 python3 -m pip install -r requirements_dev.txt
 ```
 
-Enthält z. B. `pytest` für lokale Testläufe.
+Enthält die Basis-Abhängigkeiten plus `pytest`, `pytest-cov` und `ruff`.
 
 ### 4) Gebündeltes lokales YOLO-Modell
 Dieses Repository enthält `models/forbidden_symbols_yolo.pt` direkt als normale Repository-Datei.
@@ -150,10 +181,12 @@ python3 moderate_image.py "https://example.com/image.jpg"
 python3 moderate_image.py ./images --recursive
 ```
 
-### Ohne externe APIs (Basisinstallation ausreichend)
+### Ohne externe APIs
 ```bash
 python3 moderate_image.py ./images --recursive --no-apis
 ```
+
+Mit nur der Basisinstallation melden optionale lokale Vision-Engines `skipped`, statt abzustürzen. Installiere `requirements_local.txt` oder `.[local]`, wenn lokale Inferenz laufen soll.
 
 Die lokale YOLO-Symbolerkennung erscheint mit kompakten numerischen Scores, zum Beispiel:
 ```text
@@ -205,7 +238,7 @@ Optionale Engines dürfen fehlen; sie müssen in der Ausgabe sauber als `skipped
 ## 🔧 Wichtige Konfiguration (.env)
 Das Projekt lädt automatisch `.env` aus dem Projekt-Root. Beispiel:
 
-Der Loader prüft `.env`, dann `.env.txt` und nutzt `.env.example` als Fallback-Defaults. Für beste Ergebnisse `.env.example` nach `.env` kopieren und die `.env` anpassen.
+Der Loader prüft `.env`, dann `.env.txt`. `.env.example` wird nicht automatisch geladen, weil diese Datei Dokumentation ist und Platzhalter-Credentials oder schwere optionale Engine-Einstellungen enthalten kann. Für beste Ergebnisse `.env.example` nach `.env` kopieren und die `.env` anpassen.
 
 ```env
 # API-Engines
@@ -294,3 +327,11 @@ Nützliche Schalter:
 - Nutze `--json`, wenn Ergebnisse in CI/CD oder Backend-Services weiterverarbeitet werden sollen.
 - Pflege `data/phash_allowlist.txt` und `data/phash_blocklist.txt` regelmäßig für stabile Entscheidungen bei wiederkehrendem Content.
 - Bei GIFs ggf. `--sample-frames` erhöhen, wenn problematischer Content nur in einzelnen Frames auftaucht.
+
+## Troubleshooting
+- Tesseract fehlt: installiere die System-Binary und setze `TESSERACT_CMD`, falls sie nicht im `PATH` liegt. Die OCR-Engine liefert `skipped`/kontrollierte `error` statt abzustürzen.
+- CUDA/GPU nicht verfügbar: setze `YOLO_DEVICE=cpu` und `FORBIDDEN_SYMBOLS_YOLO_DEVICE=cpu`.
+- YOLO-Modell fehlt: setze `FORBIDDEN_SYMBOLS_YOLO_MODEL` oder `YOLO_WEAPON_MODEL` auf einen absoluten Pfad. Fehlende optionale Gewichte werden als `skipped` gemeldet.
+- Git-LFS-Pointer statt echter `.pt`: führe `git lfs pull` aus; Pointer-Dateien werden erkannt und mit klarer Meldung übersprungen.
+- API-Keys fehlen: `OPENAI_API_KEY`, `SIGHTENGINE_USER` und `SIGHTENGINE_SECRET` dürfen fehlen. API-Engines überspringen sauber, solange keine Credentials gesetzt sind.
+- Windows-Pfade: Pfade mit Leerzeichen in Anführungszeichen setzen, z. B. `python moderate_image.py "C:\Users\me\Pictures\Test Image.PNG" --no-apis`. Backslashes und Großbuchstaben in Erweiterungen werden unterstützt.

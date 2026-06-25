@@ -6,11 +6,20 @@ import os
 import sys
 
 
+def _protect_stdout_encoding() -> None:
+    """Avoid UnicodeEncodeError on legacy Windows consoles."""
+    try:
+        sys.stdout.reconfigure(errors="replace")  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
+
 def configure_logging() -> None:
     """Configure root logger once, honoring MODIMG_LOG_LEVEL and MODIMG_DEBUG."""
     root = logging.getLogger("modimg")
     if root.handlers:
         return
+    _protect_stdout_encoding()
 
     level_name = os.getenv("MODIMG_LOG_LEVEL", "DEBUG" if os.getenv("MODIMG_DEBUG", "0").strip() == "1" else "INFO")
     level = getattr(logging, level_name.upper(), logging.INFO)

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 
 import numpy as np
@@ -26,9 +27,10 @@ def resolve_list_path(p: str) -> str:
     p = (p or "").strip()
     if not p:
         return p
-    if os.path.isabs(p):
-        return p
-    return os.path.join(project_root(), p)
+    path = Path(p).expanduser()
+    if path.is_absolute():
+        return str(path)
+    return str(Path(project_root()) / path)
 
 def get_allowlist_path() -> str:
     default = os.path.join("data", "phash_allowlist.txt")

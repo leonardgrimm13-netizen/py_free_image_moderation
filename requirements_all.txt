@@ -1,0 +1,5 @@
+# All optional runtime engines.
+-r requirements_local.txt
+openai>=1.0.0
+requests>=2.31.0
+sightengine>=1.0.0

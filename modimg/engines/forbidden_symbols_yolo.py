@@ -3,7 +3,9 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import os
+import site
 import sys
+import sysconfig
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -18,13 +20,21 @@ _FORBIDDEN_SYMBOLS_YOLO_CACHE: Dict[str, Any] = {}
 DEFAULT_FORBIDDEN_SYMBOLS_MODEL = "models/forbidden_symbols_yolo.pt"
 
 
+class OptionalModelUnavailable(RuntimeError):
+    """Raised when optional local model weights are absent or not real weights."""
+
+
 def _candidate_model_paths(raw: str) -> list[Path]:
     p = Path(raw).expanduser()
     if p.is_absolute():
         return [p]
     candidates = [Path(project_root()) / p, Path.cwd() / p]
-    # Wheels installed with data_files may place the model under sys.prefix/models.
-    candidates.append(Path(sys.prefix) / p)
+    install_roots: list[Path] = [Path(sys.prefix)]
+    for value in (sysconfig.get_path("data"), site.getuserbase()):
+        if value:
+            install_roots.append(Path(value))
+    # Wheels installed with data_files may place the model under an install data root.
+    candidates.extend(root / p for root in install_roots)
     out: list[Path] = []
     seen: set[str] = set()
     for candidate in candidates:
@@ -73,9 +83,9 @@ def _looks_like_model_pointer(path: Path) -> bool:
 def _load_model(model_path: str | None = None) -> Any:
     resolved = _resolve_model_path(model_path)
     if not resolved.exists():
-        raise RuntimeError(_missing_model_message(resolved))
+        raise OptionalModelUnavailable(_missing_model_message(resolved))
     if _looks_like_model_pointer(resolved):
-        raise RuntimeError(_pointer_model_message(resolved))
+        raise OptionalModelUnavailable(_pointer_model_message(resolved))
 
     key = str(resolved)
     if key in _FORBIDDEN_SYMBOLS_YOLO_CACHE:
@@ -201,8 +211,19 @@ class YOLOForbiddenSymbolsEngine(Engine):
 
         try:
             model = _load_model(str(model_path))
-        except ImportError as exc:
-            return EngineResult(name=self.name, status=EngineStatus.SKIPPED, error=str(exc), took_ms=now_ms() - start)
+        except (OptionalModelUnavailable, ImportError) as exc:
+            return EngineResult(
+                name=self.name,
+                status=EngineStatus.SKIPPED,
+                error=str(exc),
+                details={
+                    "model_path": str(model_path),
+                    "model_exists": bool(model_exists),
+                    "model_size_bytes": int(model_size),
+                    "model_pointer_detected": bool(model_pointer),
+                },
+                took_ms=now_ms() - start,
+            )
 
         device_raw = (os.getenv("FORBIDDEN_SYMBOLS_YOLO_DEVICE", "auto") or "auto").strip()
         device = None if device_raw.lower() in ("", "auto") else device_raw

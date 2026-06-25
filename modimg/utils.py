@@ -182,10 +182,19 @@ def download_url_to_temp(url: str, max_bytes: int = 25_000_000, timeout_sec: int
             raise RuntimeError("URL does not look like a supported image format (jpeg/png/webp/gif).")
 
     display = os.path.basename(urllib.parse.urlparse(url).path) or ("downloaded" + ext)
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
-    tmp.write(data)
-    tmp.close()
-    return tmp.name, display
+    tmp_path = ""
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+            tmp_path = tmp.name
+            tmp.write(data)
+        return tmp_path, display
+    except Exception:
+        if tmp_path:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+        raise
 
 def safe_model_dump(obj: Any) -> Any:
     if hasattr(obj, "model_dump"):

@@ -43,6 +43,8 @@ class OpenNSFW2Engine(Engine):
 
     def run(self, path: str, frames: List[Any], max_api_frames: Optional[int] = None) -> EngineResult:
         start = now_ms()
+        if not frames:
+            return EngineResult(name=self.name, status=EngineStatus.SKIPPED, error="no frames", took_ms=now_ms() - start)
         backend_name, n2 = self._import_backend()
 
         def _to_pil(x: Any) -> Image.Image:
