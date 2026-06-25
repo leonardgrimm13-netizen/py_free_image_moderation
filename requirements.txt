@@ -1,8 +1,4 @@
-# Runtime dependencies for offline/local moderation (no API keys required)
+# Core runtime dependencies for pHash/image loading and graceful engine skipping.
 Pillow>=10.0.0
 numpy>=1.26.0
 ImageHash>=4.3.1
-opennsfw2>=0.1.0
-nudenet>=3.4.2
-ultralytics>=8.3.0
-pytesseract>=0.3.10

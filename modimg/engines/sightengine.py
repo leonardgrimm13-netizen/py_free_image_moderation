@@ -254,7 +254,15 @@ class SightengineEngine(Engine):
 
         for fr in use_frames:
             files = {"media": ("frame.jpg", fr.get_jpeg_bytes(), "image/jpeg")}
-            r = requests.post(url, data=params_base, files=files, timeout=60)
+            try:
+                r = requests.post(url, data=params_base, files=files, timeout=60)
+            except Exception as exc:
+                return EngineResult(
+                    name=self.name,
+                    status=EngineStatus.ERROR,
+                    error=f"request failed: {type(exc).__name__}: {exc}",
+                    took_ms=now_ms() - start,
+                )
 
             if r.status_code in (402, 403, 429):
                 self.disable(f"quota/limit http={r.status_code}")

@@ -1,0 +1,6 @@
+# Optional local/vision engines.
+-r requirements.txt
+opennsfw2>=0.1.0
+nudenet>=3.4.2
+ultralytics>=8.3.0
+pytesseract>=0.3.10

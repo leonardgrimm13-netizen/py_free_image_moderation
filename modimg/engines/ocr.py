@@ -79,13 +79,21 @@ class OCREngine(Engine):
 
         text_all: List[str] = []
         use = frames[:max_frames] if max_frames > 0 else frames[:1]
+        errors: List[str] = []
         for fr in use:
             try:
                 txt = pytesseract.image_to_string(fr.pil, lang=lang) or ""
-            except Exception:
+            except Exception as exc:
+                msg = f"{type(exc).__name__}: {exc}"
+                errors.append(msg)
+                if "tesseract" in msg.lower():
+                    return EngineResult(name=self.name, status=EngineStatus.SKIPPED, error=f"tesseract unavailable: {msg}", took_ms=now_ms()-start)
                 txt = ""
             if txt:
                 text_all.append(txt)
+
+        if errors and not text_all:
+            return EngineResult(name=self.name, status=EngineStatus.ERROR, error=f"ocr failed: {errors[0]}", took_ms=now_ms()-start)
 
         joined = "\n".join(text_all).strip()
         if len(joined) < min_len:

@@ -29,7 +29,15 @@ class NudeNetEngine(Engine):
         import numpy as np  # type: ignore
 
         if NudeNetEngine._DETECTOR is None:
-            NudeNetEngine._DETECTOR = NudeDetector()
+            try:
+                NudeNetEngine._DETECTOR = NudeDetector()
+            except Exception as exc:
+                return EngineResult(
+                    name=self.name,
+                    status=EngineStatus.SKIPPED,
+                    error=f"nudenet detector unavailable: {type(exc).__name__}: {exc}",
+                    took_ms=now_ms()-start,
+                )
         detector = NudeNetEngine._DETECTOR
         exposed_max = 0.0
         covered_max = 0.0

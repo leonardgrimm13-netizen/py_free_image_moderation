@@ -39,7 +39,7 @@ def test_forbidden_symbols_engine_missing_model(monkeypatch, tmp_path) -> None:
 
     result = YOLOForbiddenSymbolsEngine().execute("dummy.png", _frame())
 
-    assert result.status == EngineStatus.ERROR
+    assert result.status == EngineStatus.SKIPPED
     assert "missing forbidden symbols YOLO model" in (result.error or "")
 
 
@@ -51,9 +51,26 @@ def test_forbidden_symbols_engine_model_pointer(monkeypatch, tmp_path) -> None:
 
     result = YOLOForbiddenSymbolsEngine().execute("dummy.png", _frame())
 
-    assert result.status == EngineStatus.ERROR
+    assert result.status == EngineStatus.SKIPPED
     assert "model pointer file detected" in (result.error or "")
     assert "real model weights" in (result.error or "")
+
+
+def test_forbidden_symbols_engine_missing_ultralytics_skips(monkeypatch, tmp_path) -> None:
+    import importlib.util
+
+    model = tmp_path / "model.pt"
+    model.write_bytes(b"not a model pointer" * 200)
+    sys.modules.pop("ultralytics", None)
+    real_find_spec = importlib.util.find_spec
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name: None if name == "ultralytics" else real_find_spec(name))
+    monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_ENABLE", "1")
+    monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_MODEL", str(model))
+
+    result = YOLOForbiddenSymbolsEngine().execute("dummy.png", _frame())
+
+    assert result.status == EngineStatus.SKIPPED
+    assert "ultralytics not available" in (result.error or "")
 
 
 class FakeBoxes:
@@ -85,6 +102,31 @@ class FakeYOLO:
         assert kwargs["max_det"] == 20
         assert kwargs["verbose"] is False
         return [FakeResult(self.confidence)]
+
+
+class FakeEmptyYOLO:
+    names = {0: "test_symbol"}
+
+    def __init__(self, model_path: str) -> None:
+        self.model_path = model_path
+
+    def predict(self, image, **kwargs):
+        return []
+
+
+def test_forbidden_symbols_engine_empty_detections(monkeypatch, tmp_path) -> None:
+    model = tmp_path / "model.pt"
+    model.write_bytes(b"not a model pointer" * 200)
+    monkeypatch.setitem(sys.modules, "ultralytics", types.SimpleNamespace(YOLO=FakeEmptyYOLO))
+    monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_ENABLE", "1")
+    monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_MODEL", str(model))
+
+    result = YOLOForbiddenSymbolsEngine().execute("dummy.png", _frame())
+
+    assert result.status == EngineStatus.OK
+    assert result.scores["forbidden_symbols_detected"] == 0.0
+    assert result.scores["forbidden_symbols_max_conf"] == 0.0
+    assert result.details["detections"] == []
 
 
 def test_forbidden_symbols_engine_mock_detection(monkeypatch, tmp_path) -> None:
@@ -206,6 +248,23 @@ def test_forbidden_symbols_model_path_resolution_accepts_project_relative(monkey
     model.write_bytes(b"not a model pointer" * 200)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_MODEL", "rel_model.pt")
+    from modimg.engines.forbidden_symbols_yolo import _resolve_model_path
+
+    assert _resolve_model_path() == model.resolve()
+
+
+def test_forbidden_symbols_model_path_resolution_accepts_installed_data_root(monkeypatch, tmp_path) -> None:
+    install_root = tmp_path / "install"
+    model = install_root / "models" / "forbidden_symbols_yolo.pt"
+    model.parent.mkdir(parents=True)
+    model.write_bytes(b"not a model pointer" * 200)
+    (tmp_path / "elsewhere").mkdir(exist_ok=True)
+    monkeypatch.chdir(tmp_path / "elsewhere")
+    monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_MODEL", "models/forbidden_symbols_yolo.pt")
+    monkeypatch.setattr("modimg.engines.forbidden_symbols_yolo.project_root", lambda: str(tmp_path / "project"))
+    monkeypatch.setattr("modimg.engines.forbidden_symbols_yolo.sys.prefix", str(tmp_path / "prefix"))
+    monkeypatch.setattr("modimg.engines.forbidden_symbols_yolo.sysconfig.get_path", lambda name: str(install_root) if name == "data" else "")
+    monkeypatch.setattr("modimg.engines.forbidden_symbols_yolo.site.getuserbase", lambda: str(tmp_path / "userbase"))
     from modimg.engines.forbidden_symbols_yolo import _resolve_model_path
 
     assert _resolve_model_path() == model.resolve()

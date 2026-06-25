@@ -49,3 +49,19 @@ def test_sightengine_http_error_returns_error(monkeypatch) -> None:
 
     assert result.status == EngineStatus.ERROR
     assert result.error == "http error 500"
+
+
+def test_sightengine_request_exception_returns_error(monkeypatch) -> None:
+    monkeypatch.setenv("SIGHTENGINE_USER", "user")
+    monkeypatch.setenv("SIGHTENGINE_SECRET", "secret")
+
+    def fail_post(*args, **kwargs):
+        raise TimeoutError("timed out")
+
+    fake_requests = types.SimpleNamespace(post=fail_post)
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+
+    result = SightengineEngine().run("dummy.png", _frame())
+
+    assert result.status == EngineStatus.ERROR
+    assert "request failed: TimeoutError: timed out" == result.error

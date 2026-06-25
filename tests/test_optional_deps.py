@@ -3,6 +3,7 @@ from __future__ import annotations
 import builtins
 from PIL import Image
 from modimg.pipeline import build_main_engines, run_engines
+from modimg.engines.ocr import OCREngine
 from modimg.engines.yolo_weapons import YOLOWorldWeaponsEngine
 from modimg.types import Frame
 
@@ -133,3 +134,35 @@ def test_yolo_weapon_model_missing_explicit_path_skips_before_import(monkeypatch
     assert result.error is not None
     assert "explicit YOLO weapons model path not found" in result.error
     assert "weights/missing.pt" in result.error
+
+
+def test_ocr_missing_tesseract_binary_is_skipped(monkeypatch, tmp_path) -> None:
+    import sys
+    import types
+
+    blocklist = tmp_path / "ocr_text_blocklist.txt"
+    blocklist.write_text("blocked\n", encoding="utf-8")
+
+    class FakePytesseract:
+        class TesseractNotFoundError(RuntimeError):
+            pass
+
+        @staticmethod
+        def image_to_string(*args, **kwargs):
+            raise FakePytesseract.TesseractNotFoundError("tesseract is not installed")
+
+    fake_module = types.SimpleNamespace(
+        image_to_string=FakePytesseract.image_to_string,
+        pytesseract=types.SimpleNamespace(tesseract_cmd=""),
+        TesseractNotFoundError=FakePytesseract.TesseractNotFoundError,
+    )
+    monkeypatch.setitem(sys.modules, "pytesseract", fake_module)
+    monkeypatch.setenv("OCR_ENABLE", "1")
+
+    engine = OCREngine()
+    engine.blocklist_path = str(blocklist)
+    frame = Frame(idx=0, pil=Image.new("RGB", (2, 2)))
+    result = engine.execute("dummy.png", [frame])
+
+    assert result.status == "skipped"
+    assert "tesseract unavailable" in (result.error or "")
