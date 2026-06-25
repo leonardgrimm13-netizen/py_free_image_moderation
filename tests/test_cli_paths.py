@@ -110,6 +110,35 @@ def test_file_path_with_spaces_unicode_and_uppercase_extension(tmp_path) -> None
     assert Path(payload["path"]).name == img.name
 
 
+def test_cli_expands_tilde_for_single_image_path(tmp_path) -> None:
+    fake_home = tmp_path / "home user"
+    images_dir = fake_home / "pictures"
+    images_dir.mkdir(parents=True)
+    img = images_dir / "tilde image.png"
+    report = tmp_path / "reports" / "tilde-report.json"
+    _make_image(img)
+
+    env = _fast_env()
+    env["HOME"] = str(fake_home)
+    env["USERPROFILE"] = str(fake_home)
+
+    proc = subprocess.run(
+        [sys.executable, "moderate_image.py", "~/pictures/tilde image.png", "--no-apis", "--json", str(report)],
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=env,
+    )
+
+    combined = f"{proc.stdout}\n{proc.stderr}"
+    assert proc.returncode == 0
+    assert "Traceback (most recent call last)" not in combined
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert Path(payload["path"]) == img
+
+
 def test_invalid_image_returns_loader_error_json(tmp_path) -> None:
     bad = tmp_path / "broken.png"
     report = tmp_path / "broken-report.json"

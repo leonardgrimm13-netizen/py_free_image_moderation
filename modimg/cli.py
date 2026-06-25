@@ -72,7 +72,7 @@ def _iter_paths(p: str, recursive: bool) -> List[str]:
         if recursive:
             return sorted(str(x) for x in path.rglob("*") if x.is_file() and is_image_file(str(x)))
         return sorted(str(x) for x in path.iterdir() if x.is_file() and is_image_file(str(x)))
-    return [p]
+    return [str(path)]
 
 
 def _write_json_file(path: str, payload: Any) -> None:
