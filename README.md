@@ -22,7 +22,7 @@ A flexible Python project for **image and GIF moderation** with multiple engines
 - Combinable engines:
   - `OpenNSFW2`
   - `NudeNet`
-  - `YOLO` (weapon detection)
+  - `YOLO weapon detection` (local YOLO-detection for weapon detection using `models/weapon_detection_yolo.pt`)
   - `YOLO forbidden symbols` (local forbidden/harmful-symbol detection using `models/forbidden_symbols_yolo.pt`)
   - `OpenAI Moderation` (optional via API key)
   - `Sightengine` (optional via API credentials)
