@@ -57,6 +57,7 @@ wandb/
 models/*
 !models/.gitkeep
 !models/forbidden_symbols_yolo.pt
+!models/yolov8s-oiv7.pt
 
 # Reports / generated output
 moderation_report.json

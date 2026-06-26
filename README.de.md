@@ -277,7 +277,7 @@ PHASH_AUTO_BLOCK_APPEND=0
 # pHash-Auto-Lernen ist standardmäßig aus; erst nach Prüfung von Thresholds und False Positives aktivieren.
 
 # Optionales YOLO-World-Waffenmodell
-# Wenn leer und .cache/ultralytics/weights/yolov8s-oiv7.pt fehlt, wird die Engine übersprungen.
+# Wenn leer und models/yolov8s-oiv7.pt fehlt, wird die Engine übersprungen.
 YOLO_WEAPON_MODEL=
 YOLO_WORLD_MODEL=
 YOLO_CONF=0.25

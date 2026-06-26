@@ -25,7 +25,7 @@ def _configured_model_name() -> Tuple[str, bool]:
 
 
 def _default_model_path() -> str:
-    return os.path.join(project_root(), ".cache", "ultralytics", "weights", "yolov8s-oiv7.pt")
+    return os.path.join(project_root(), "models", "yolov8s-oiv7.pt")
 
 
 def _looks_like_path(model_name: str) -> bool:
@@ -127,7 +127,9 @@ class YOLOWorldWeaponsEngine(Engine):
 
         ok, why = self.available()
         if not ok:
-            return EngineResult(name=self.name, status=EngineStatus.SKIPPED, error=why, details={"model": model_ref}, took_ms=now_ms() - start)
+            return EngineResult(
+                name=self.name, status=EngineStatus.SKIPPED, error=why, details={"model": model_ref}, took_ms=now_ms() - start
+            )
 
         mdl = _load_model(model_ref)
         conf = env_float("YOLO_CONF", 0.25, min_value=0.0, max_value=1.0)

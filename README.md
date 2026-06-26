@@ -276,7 +276,7 @@ PHASH_AUTO_ALLOW_APPEND=0
 PHASH_AUTO_BLOCK_APPEND=0
 
 # Optional YOLO-World weapons model
-# If unset and .cache/ultralytics/weights/yolov8s-oiv7.pt is missing, the engine is skipped.
+# If unset and models/yolov8s-oiv7.pt is missing, the engine is skipped.
 YOLO_WEAPON_MODEL=
 YOLO_WORLD_MODEL=
 YOLO_CONF=0.25

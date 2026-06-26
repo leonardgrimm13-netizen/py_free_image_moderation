@@ -1,3 +1,4 @@
 include README.md README.de.md requirements*.txt
 include models/forbidden_symbols_yolo.pt
+include models/yolov8s-oiv7.pt
 recursive-include data *.txt

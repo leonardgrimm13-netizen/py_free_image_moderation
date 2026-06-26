@@ -55,7 +55,10 @@ include = ["modimg*"]
 exclude = ["tests*"]
 
 [tool.setuptools.data-files]
-"models" = ["models/forbidden_symbols_yolo.pt"]
+"models" = [
+    "models/forbidden_symbols_yolo.pt",
+    "models/yolov8s-oiv7.pt",
+]
 
 [tool.ruff]
 line-length = 140
