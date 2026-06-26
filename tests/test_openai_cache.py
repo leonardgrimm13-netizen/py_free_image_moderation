@@ -25,6 +25,29 @@ def test_openai_cache_save_is_reentrant_under_cache_lock(monkeypatch, tmp_path) 
     assert (tmp_path / "openai_cache.json").exists()
 
 
+def test_openai_cache_path_change_resets_cached_state(monkeypatch, tmp_path) -> None:
+    first = tmp_path / "first.json"
+    second = tmp_path / "second.json"
+    monkeypatch.setenv("OPENAI_CACHE_PATH", str(first))
+
+    OpenAIModerationEngine._CACHE = {"old": {"scores": {}, "details": {}}}
+    OpenAIModerationEngine._CACHE_PATH = None
+    OpenAIModerationEngine._CACHE_DIR_READY = True
+    OpenAIModerationEngine._CACHE_DIRTY = True
+    OpenAIModerationEngine._CACHE_WRITES_SINCE_FLUSH = 1
+
+    eng = OpenAIModerationEngine()
+    assert eng._cache_path() == str(first)
+
+    monkeypatch.setenv("OPENAI_CACHE_PATH", str(second))
+
+    assert eng._cache_path() == str(second)
+    assert OpenAIModerationEngine._CACHE is None
+    assert OpenAIModerationEngine._CACHE_DIR_READY is False
+    assert OpenAIModerationEngine._CACHE_DIRTY is False
+    assert OpenAIModerationEngine._CACHE_WRITES_SINCE_FLUSH == 0
+
+
 def test_openai_missing_api_key_is_skipped(monkeypatch) -> None:
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setenv("OPENAI_DISABLE", "0")

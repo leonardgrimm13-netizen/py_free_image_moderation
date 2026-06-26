@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from ..enums import EngineStatus
 from ..types import Engine, EngineResult, Frame
 from ..config import project_root
-from ..utils import env_float, env_int, now_ms, safe_model_dump
+from ..utils import env_bool, env_float, env_int, now_ms, safe_model_dump
 
 
 def _read_text(p: str) -> str:
@@ -60,7 +60,7 @@ class OpenAIModerationEngine(Engine):
         self.extra_text = (extra_text or "").strip()
 
     def available(self) -> Tuple[bool, str]:
-        if os.getenv("OPENAI_DISABLE", "0").strip() == "1":
+        if env_bool("OPENAI_DISABLE", False):
             return False, "disabled via OPENAI_DISABLE=1"
         if OpenAIModerationEngine._DISABLED_REASON:
             return False, OpenAIModerationEngine._DISABLED_REASON
@@ -76,17 +76,24 @@ class OpenAIModerationEngine(Engine):
             return False, f"missing dependency (pip install openai): {e}"
 
     def _cache_enabled(self) -> bool:
-        return os.getenv("OPENAI_CACHE_ENABLE", "1").strip() == "1"
+        return env_bool("OPENAI_CACHE_ENABLE", True)
 
     def _cache_path(self) -> str:
         # Resolve relative path from project root for predictable behavior.
-        if OpenAIModerationEngine._CACHE_PATH:
-            return OpenAIModerationEngine._CACHE_PATH
         raw = os.getenv("OPENAI_CACHE_PATH", ".cache/openai_moderation_cache.json")
         raw = raw.strip() or ".cache/openai_moderation_cache.json"
         if not os.path.isabs(raw):
             raw = os.path.join(project_root(), raw)
-        OpenAIModerationEngine._CACHE_PATH = raw
+        with OpenAIModerationEngine._CACHE_LOCK:
+            if OpenAIModerationEngine._CACHE_PATH and OpenAIModerationEngine._CACHE_PATH != raw:
+                OpenAIModerationEngine._CACHE = None
+                OpenAIModerationEngine._CACHE_DIR_READY = False
+                OpenAIModerationEngine._CACHE_DIRTY = False
+                OpenAIModerationEngine._CACHE_WRITES_SINCE_FLUSH = 0
+                OpenAIModerationEngine._CACHE_DIR_ERROR = False
+                OpenAIModerationEngine._CACHE_DIR_ERROR_REASON = None
+            if not OpenAIModerationEngine._CACHE_PATH or OpenAIModerationEngine._CACHE_PATH != raw:
+                OpenAIModerationEngine._CACHE_PATH = raw
         return raw
 
     def _ensure_cache_dir(self) -> None:

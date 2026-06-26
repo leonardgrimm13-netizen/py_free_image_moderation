@@ -12,7 +12,7 @@ from typing import Any, Dict, List
 from ..config import project_root
 from ..enums import EngineStatus
 from ..types import Engine, EngineResult, Frame
-from ..utils import env_bool, env_float, env_int, env_label_set, now_ms, safe_float01
+from ..utils import env_bool, env_float, env_int, env_label_float_map, env_label_set, now_ms, safe_float01
 
 _FORBIDDEN_SYMBOLS_YOLO_CACHE: Dict[str, Any] = {}
 
@@ -151,6 +151,10 @@ def _predict(model: Any, image: Any, *, conf: float, iou: float, imgsz: int, max
             return model.predict(image, **kwargs)
 
 
+def _threshold_for_label(label: str, default: float, overrides: dict[str, float]) -> float:
+    return float(overrides.get(label.strip().lower(), default))
+
+
 class YOLOForbiddenSymbolsEngine(Engine):
     """Local forbidden/harmful-symbol detection using the bundled YOLO model."""
 
@@ -175,6 +179,8 @@ class YOLOForbiddenSymbolsEngine(Engine):
         max_frames = env_int("FORBIDDEN_SYMBOLS_YOLO_MAX_FRAMES", 2)
         review_conf = env_float("FORBIDDEN_SYMBOLS_YOLO_REVIEW_CONF", 0.30)
         block_conf = env_float("FORBIDDEN_SYMBOLS_YOLO_BLOCK_CONF", 0.90)
+        label_review_conf = env_label_float_map("FORBIDDEN_SYMBOLS_YOLO_LABEL_REVIEW_CONF")
+        label_block_conf = env_label_float_map("FORBIDDEN_SYMBOLS_YOLO_LABEL_BLOCK_CONF")
         if max_frames <= 0:
             return EngineResult(
                 name=self.name,
@@ -198,6 +204,8 @@ class YOLOForbiddenSymbolsEngine(Engine):
                     "max_frames": int(max_frames),
                     "review_conf": float(review_conf),
                     "block_conf": float(block_conf),
+                    "label_review_conf": label_review_conf,
+                    "label_block_conf": label_block_conf,
                     "detection_count": 0,
                     "top_label": "",
                     "top_confidence": 0.0,
@@ -282,6 +290,18 @@ class YOLOForbiddenSymbolsEngine(Engine):
         max_conf = max((float(d["confidence"]) for d in detections), default=0.0)
         top = max(detections, key=lambda d: float(d["confidence"])) if detections else None
         top_label = str(top.get("label", "")) if top else ""
+        review_detections = [
+            d
+            for d in detections
+            if float(d["confidence"]) >= _threshold_for_label(str(d.get("label", "")), review_conf, label_review_conf)
+        ]
+        block_detections = [
+            d
+            for d in detections
+            if float(d["confidence"]) >= _threshold_for_label(str(d.get("label", "")), block_conf, label_block_conf)
+        ]
+        review_top = max(review_detections, key=lambda d: float(d["confidence"])) if review_detections else None
+        block_top = max(block_detections, key=lambda d: float(d["confidence"])) if block_detections else None
 
         return EngineResult(
             name=self.name,
@@ -289,8 +309,8 @@ class YOLOForbiddenSymbolsEngine(Engine):
             scores={
                 "forbidden_symbols_detected": 1.0 if detections else 0.0,
                 "forbidden_symbols_max_conf": safe_float01(max_conf),
-                "forbidden_symbols_review_hit": 1.0 if max_conf >= review_conf else 0.0,
-                "forbidden_symbols_block_hit": 1.0 if max_conf >= block_conf else 0.0,
+                "forbidden_symbols_review_hit": 1.0 if (review_top is not None or block_top is not None) else 0.0,
+                "forbidden_symbols_block_hit": 1.0 if block_top is not None else 0.0,
                 "forbidden_symbols_detection_count": float(len(detections)),
                 "forbidden_symbols_top_conf": safe_float01(max_conf),
             },
@@ -305,10 +325,14 @@ class YOLOForbiddenSymbolsEngine(Engine):
                 "max_frames": int(max_frames),
                 "review_conf": float(review_conf),
                 "block_conf": float(block_conf),
+                "label_review_conf": label_review_conf,
+                "label_block_conf": label_block_conf,
                 "device": device_raw,
                 "detection_count": len(detections),
                 "top_label": top_label,
                 "top_confidence": safe_float01(max_conf),
+                "review_detection": review_top,
+                "block_detection": block_top,
                 "detections": detections,
                 "model_pointer_detected": bool(model_pointer),
                 "inference_skipped": False,

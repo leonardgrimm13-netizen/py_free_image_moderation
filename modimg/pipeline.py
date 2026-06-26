@@ -10,7 +10,7 @@ from .config import get_config
 from .enums import EngineStatus, VerdictLabel
 from .logging_utils import get_logger
 from .types import Engine, EngineResult, Verdict, Frame
-from .utils import is_url, download_url_to_temp, status_value
+from .utils import env_bool, is_url, download_url_to_temp, status_value
 from .frames import load_frames
 from .verdict import compute_verdict
 from .phash import (
@@ -105,16 +105,15 @@ def maybe_auto_learn(verdict: Verdict, frames: List[Frame]) -> Optional[str]:
     try:
         if not frames:
             return None
-        auto_learn_raw = os.getenv("PHASH_AUTO_LEARN_ENABLE")
-        auto_learn_is_set = auto_learn_raw is not None
-        auto_learn = (auto_learn_raw or "0").strip() == "1"
+        auto_learn_is_set = os.getenv("PHASH_AUTO_LEARN_ENABLE") is not None
+        auto_learn = env_bool("PHASH_AUTO_LEARN_ENABLE", False)
         if auto_learn_is_set and not auto_learn:
             return None
         if not auto_learn_is_set:
-            legacy_any = os.getenv("PHASH_AUTO_APPEND", "0").strip() == "1" or os.getenv("PHASH_AUTO_ALLOW_APPEND", "0").strip() == "1"
+            legacy_any = env_bool("PHASH_AUTO_APPEND", False) or env_bool("PHASH_AUTO_ALLOW_APPEND", False)
             if not legacy_any:
                 return None
-        learn_first_last = os.getenv("PHASH_GIF_LEARN_FIRST_LAST", "0").strip() == "1"
+        learn_first_last = env_bool("PHASH_GIF_LEARN_FIRST_LAST", False)
         frs = [frames[0], frames[-1]] if learn_first_last and len(frames) > 1 else [frames[0]]
         hashes = [frame_phash_hex_int(fr)[0] for fr in frs]
 
@@ -126,7 +125,7 @@ def maybe_auto_learn(verdict: Verdict, frames: List[Frame]) -> Optional[str]:
             if block_append == "":
                 block_append = "1"
 
-        if verdict.label == VerdictLabel.OK and allow_append == "1":
+        if verdict.label == VerdictLabel.OK and env_bool("PHASH_AUTO_ALLOW_APPEND", allow_append == "1"):
             label = os.getenv("PHASH_AUTO_ALLOW_LABEL", os.getenv("PHASH_AUTO_LABEL", "ok")).strip() or "ok"
             apath = get_allowlist_path()
             added_any = False
@@ -135,7 +134,7 @@ def maybe_auto_learn(verdict: Verdict, frames: List[Frame]) -> Optional[str]:
             if added_any:
                 return f"Auto-added pHash to allowlist ({apath})"
 
-        if verdict.label == VerdictLabel.BLOCK and block_append == "1":
+        if verdict.label == VerdictLabel.BLOCK and env_bool("PHASH_AUTO_BLOCK_APPEND", block_append == "1"):
             label = os.getenv("PHASH_AUTO_BLOCK_LABEL", os.getenv("PHASH_AUTO_LABEL", "not_ok")).strip() or "not_ok"
             bpath = get_blocklist_path()
             added_any = False

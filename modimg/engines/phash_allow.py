@@ -5,7 +5,7 @@ from typing import List, Tuple, Optional
 
 from ..enums import EngineStatus
 from ..types import Engine, EngineResult, Frame
-from ..utils import env_int_any, now_ms
+from ..utils import env_bool, env_int_any, now_ms
 from .. import phash as ph
 
 
@@ -25,7 +25,7 @@ class PHashAllowlistEngine(Engine):
         )
 
     def available(self) -> Tuple[bool, str]:
-        if os.getenv("PHASH_ALLOW_DISABLE", "0") == "1":
+        if env_bool("PHASH_ALLOW_DISABLE", False):
             return False, "disabled via PHASH_ALLOW_DISABLE=1"
         p = ph.resolve_list_path(self.allowlist_path)
         if not p:
