@@ -48,6 +48,23 @@ def _candidate_model_paths(model_name: str) -> list[Path]:
     return out
 
 
+def _looks_like_model_pointer(path: Path) -> bool:
+    try:
+        if path.stat().st_size > 1024:
+            return False
+        head = path.read_text("utf-8", errors="ignore")[:200]
+        return "git-lfs.github.com/spec" in head
+    except OSError:
+        return False
+
+
+def _pointer_model_message(path: Path) -> str:
+    return (
+        f"model pointer file detected instead of real YOLO weights: {path}. "
+        "This looks like a Git-LFS pointer; run `git lfs pull` and retry."
+    )
+
+
 def _resolve_model_reference() -> Tuple[str, bool, str | None]:
     """Return (model reference for Ultralytics, explicit, skip reason)."""
     configured, explicit = _configured_model_name()
@@ -55,6 +72,8 @@ def _resolve_model_reference() -> Tuple[str, bool, str | None]:
         candidates = _candidate_model_paths(configured)
         for candidate in candidates:
             if candidate.exists():
+                if _looks_like_model_pointer(candidate):
+                    return str(candidate.resolve()), True, _pointer_model_message(candidate.resolve())
                 return str(candidate.resolve()), True, None
         if _looks_like_path(configured):
             searched = ", ".join(str(c.resolve(strict=False)) for c in candidates)
@@ -65,6 +84,8 @@ def _resolve_model_reference() -> Tuple[str, bool, str | None]:
     default_model = Path(_default_model_path())
     if not default_model.exists():
         return str(default_model), False, f"missing default YOLO model path: {default_model}"
+    if _looks_like_model_pointer(default_model):
+        return str(default_model.resolve()), False, _pointer_model_message(default_model.resolve())
     return str(default_model.resolve()), False, None
 
 

@@ -1,6 +1,9 @@
 # Optional local/vision engines.
 -r requirements.txt
-opennsfw2>=0.1.0
-nudenet>=3.4.2
-ultralytics>=8.3.0
+
+# OpenNSFW2 needs a backend extra. The tf-keras extra uses the legacy
+# TensorFlow Keras path, which is the default supported local install here.
+opennsfw2[tf-keras]>=0.18.0,<0.19
+nudenet>=3.4.2,<4
+ultralytics>=8.3.0,<9
 pytesseract>=0.3.10

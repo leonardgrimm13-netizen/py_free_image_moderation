@@ -56,6 +56,55 @@ def test_opennsfw2_disable_flag_short_circuits_backend_import(monkeypatch) -> No
     assert reason == "disabled via OPENNSFW2_DISABLE=1"
 
 
+def test_opennsfw2_predict_image_uses_path(monkeypatch, tmp_path) -> None:
+    import sys
+    import types
+
+    from modimg.engines.opennsfw2_engine import OpenNSFW2Engine
+
+    image_path = tmp_path / "sample.png"
+    Image.new("RGB", (2, 2)).save(image_path)
+    seen: list[str] = []
+
+    def predict_image(path: str) -> float:
+        seen.append(path)
+        return 0.42
+
+    monkeypatch.setenv("OPENNSFW2_IN_PROCESS", "1")
+    monkeypatch.setattr(OpenNSFW2Engine, "_BACKEND", None)
+    monkeypatch.setitem(sys.modules, "opennsfw2", types.SimpleNamespace(predict_image=predict_image))
+
+    frame = Frame(idx=0, pil=Image.new("RGB", (2, 2)))
+    result = OpenNSFW2Engine().execute(str(image_path), [frame])
+
+    assert result.status == "ok"
+    assert result.scores["nsfw_probability"] == 0.42
+    assert seen == [str(image_path)]
+
+
+def test_opennsfw2_missing_backend_during_prediction_is_skipped(monkeypatch, tmp_path) -> None:
+    import sys
+    import types
+
+    from modimg.engines.opennsfw2_engine import OpenNSFW2Engine
+
+    image_path = tmp_path / "sample.png"
+    Image.new("RGB", (2, 2)).save(image_path)
+
+    def predict_image(path: str) -> float:
+        raise ModuleNotFoundError("No module named 'tensorflow'")
+
+    monkeypatch.setenv("OPENNSFW2_IN_PROCESS", "1")
+    monkeypatch.setattr(OpenNSFW2Engine, "_BACKEND", None)
+    monkeypatch.setitem(sys.modules, "opennsfw2", types.SimpleNamespace(predict_image=predict_image))
+
+    frame = Frame(idx=0, pil=Image.new("RGB", (2, 2)))
+    result = OpenNSFW2Engine().execute(str(image_path), [frame])
+
+    assert result.status == "skipped"
+    assert "prediction failed" in (result.error or "")
+
+
 def test_yolo_skips_when_default_model_path_missing(monkeypatch, tmp_path) -> None:
     engine = YOLOWorldWeaponsEngine()
     monkeypatch.setenv("YOLO_WORLD_MODEL", "")
@@ -136,6 +185,33 @@ def test_yolo_weapon_model_missing_explicit_path_skips_before_import(monkeypatch
     assert "weights/missing.pt" in result.error
 
 
+def test_yolo_weapon_model_pointer_skips_before_import(monkeypatch, tmp_path) -> None:
+    import builtins
+
+    pointer = tmp_path / "weapon.pt"
+    pointer.write_text("version https://git-lfs.github.com/spec/v1\n", encoding="utf-8")
+
+    real_import = builtins.__import__
+
+    def fail_ultralytics_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name.split(".", 1)[0] == "ultralytics":
+            raise AssertionError("ultralytics should not be imported for a pointer file")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setenv("YOLO_WORLD_MODEL", "")
+    monkeypatch.setenv("YOLO_WEAPON_MODEL", str(pointer))
+    monkeypatch.setenv("YOLO_WEAPONS_WEIGHTS", "")
+    monkeypatch.setattr(builtins, "__import__", fail_ultralytics_import)
+
+    frame = Frame(idx=0, pil=Image.new("RGB", (2, 2)))
+    result = YOLOWorldWeaponsEngine().run(path="dummy.png", frames=[frame])
+
+    assert result.status == "skipped"
+    assert result.error is not None
+    assert "model pointer file detected" in result.error
+    assert "git lfs pull" in result.error.lower()
+
+
 def test_ocr_missing_tesseract_binary_is_skipped(monkeypatch, tmp_path) -> None:
     import sys
     import types
@@ -166,3 +242,52 @@ def test_ocr_missing_tesseract_binary_is_skipped(monkeypatch, tmp_path) -> None:
 
     assert result.status == "skipped"
     assert "tesseract unavailable" in (result.error or "")
+
+
+def test_nudenet_detect_uses_image_path(monkeypatch, tmp_path) -> None:
+    import sys
+    import types
+
+    from modimg.engines.nudenet_engine import NudeNetEngine
+
+    image_path = tmp_path / "sample.png"
+    Image.new("RGB", (2, 2)).save(image_path)
+    seen: list[str] = []
+
+    class FakeDetector:
+        def detect(self, input_path: str):
+            seen.append(input_path)
+            return [{"class": "FEMALE_BREAST_EXPOSED", "score": 0.73}]
+
+    monkeypatch.setattr(NudeNetEngine, "_DETECTOR", None)
+    monkeypatch.setitem(sys.modules, "nudenet", types.SimpleNamespace(NudeDetector=lambda: FakeDetector()))
+
+    frame = Frame(idx=0, pil=Image.new("RGB", (2, 2)))
+    result = NudeNetEngine().execute(str(image_path), [frame])
+
+    assert result.status == "ok"
+    assert result.scores["nudity_exposed"] == 0.73
+    assert seen == [str(image_path)]
+
+
+def test_nudenet_detection_failure_is_error(monkeypatch, tmp_path) -> None:
+    import sys
+    import types
+
+    from modimg.engines.nudenet_engine import NudeNetEngine
+
+    image_path = tmp_path / "sample.png"
+    Image.new("RGB", (2, 2)).save(image_path)
+
+    class FakeDetector:
+        def detect(self, input_path: str):
+            raise RuntimeError("bad detector state")
+
+    monkeypatch.setattr(NudeNetEngine, "_DETECTOR", None)
+    monkeypatch.setitem(sys.modules, "nudenet", types.SimpleNamespace(NudeDetector=lambda: FakeDetector()))
+
+    frame = Frame(idx=0, pil=Image.new("RGB", (2, 2)))
+    result = NudeNetEngine().execute(str(image_path), [frame])
+
+    assert result.status == "error"
+    assert "nudenet detection failed" in (result.error or "")
