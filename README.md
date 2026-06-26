@@ -36,8 +36,11 @@ A flexible Python project for **image and GIF moderation** with multiple engines
 ```text
 py_free_image_moderation/
 ├── moderate_image.py         # Entry point (CLI wrapper)
-├── requirements.txt
-├── requirements_api.txt
+├── requirements.txt        # core runtime
+├── requirements_local.txt  # local vision/OCR engines
+├── requirements_api.txt    # API engines
+├── requirements_all.txt    # local + API runtime
+├── requirements_dev.txt    # tests/lint/build tools
 ├── models/
 │   └── forbidden_symbols_yolo.pt  # bundled local YOLO model for forbidden-symbol detection
 ├── data/
@@ -57,7 +60,9 @@ py_free_image_moderation/
 ---
 
 ## ⚙️ Installation
-> Recommended: Python **3.11+** in a virtual environment.
+> Recommended and supported for this project: Python **3.11 or 3.12** in a virtual environment.
+>
+> `pyproject.toml` declares `>=3.11,<3.13`. Python 3.13+ is not claimed as supported unless you test it yourself.
 
 ### 1) Repository and venv
 Linux/macOS:
@@ -65,8 +70,9 @@ Linux/macOS:
 git clone https://github.com/leonardgrimm13-netizen/py_free_image_moderation.git
 cd py_free_image_moderation
 
-python3 -m venv .venv
+python3.12 -m venv .venv  # or: python3.11 -m venv .venv
 source .venv/bin/activate
+python -m pip install --upgrade pip
 ```
 
 Windows PowerShell:
@@ -74,25 +80,16 @@ Windows PowerShell:
 git clone https://github.com/leonardgrimm13-netizen/py_free_image_moderation.git
 cd py_free_image_moderation
 
-py -3.11 -m venv .venv
+py -3.12 -m venv .venv  # or: py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
-```
-
-Windows CMD:
-```bat
-git clone https://github.com/leonardgrimm13-netizen/py_free_image_moderation.git
-cd py_free_image_moderation
-
-py -3.11 -m venv .venv
-.venv\Scripts\activate.bat
+python -m pip install --upgrade pip
 ```
 
 ### 2) Install options
 
 #### A) Base/Core
 ```bash
-python3 -m pip install --upgrade pip
-python3 -m pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
 Includes only the lightweight core dependencies:
@@ -104,46 +101,49 @@ This is enough for image loading, GIF frame sampling, pHash allow/block lists, J
 
 #### B) Local/Vision
 ```bash
-python3 -m pip install -r requirements_local.txt
+python -m pip install -r requirements_local.txt
 ```
 
 Includes the base runtime plus local vision/OCR engine dependencies:
-- `opennsfw2`
+- `opennsfw2[tf-keras]`
 - `nudenet`
 - `ultralytics`
 - `pytesseract`
 
 This enables the local pipeline including OpenNSFW2, NudeNet, YOLO weapons, local YOLO forbidden-symbol detection, OCR Python bindings, and `--no-apis`.
 
+OpenNSFW2 is installed with the `tf-keras` extra on purpose. OpenNSFW2 needs a backend, and this project uses the TensorFlow/tf-keras path as the stable default for Python 3.11/3.12. The plain `opennsfw2` package is not enough for reliable local inference.
+
 #### C) API engines
 ```bash
-python3 -m pip install -r requirements_api.txt
+python -m pip install -r requirements_api.txt
 ```
 
 Includes the base runtime plus API clients:
 - `openai` (OpenAI moderation)
-- `requests` (HTTP client used by Sightengine)
-- `sightengine` (Sightengine API package, kept for compatibility)
+- `requests` (HTTP client used by the Sightengine engine)
+
+The code calls Sightengine through direct HTTP requests; it does not import a separate `sightengine` SDK.
 
 #### D) All runtime engines
 ```bash
-python3 -m pip install -r requirements_all.txt
+python -m pip install -r requirements_all.txt
 ```
 
 Editable installs use the same split via extras:
 ```bash
-python3 -m pip install -e ".[dev]"      # tests/linting only
-python3 -m pip install -e ".[local]"    # local vision engines
-python3 -m pip install -e ".[api]"      # API engines
-python3 -m pip install -e ".[all]"      # local vision + API engines
+python -m pip install -e ".[dev]"      # tests/linting only
+python -m pip install -e ".[local]"    # local vision engines
+python -m pip install -e ".[api]"      # API engines
+python -m pip install -e ".[all]"      # local vision + API engines
 ```
 
 ### 3) Dev/Test dependencies
 ```bash
-python3 -m pip install -r requirements_dev.txt
+python -m pip install -r requirements_dev.txt
 ```
 
-Includes the base runtime plus `pytest`, `pytest-cov`, and `ruff`.
+Includes the base runtime plus `pytest`, `pytest-cov`, `ruff`, and `build`.
 
 ### 4) Bundled local YOLO model
 This repository includes `models/forbidden_symbols_yolo.pt` directly as a normal repository file.
@@ -163,27 +163,27 @@ For OCR you typically need a local Tesseract install:
 
 ### Check a single image
 ```bash
-python3 moderate_image.py /path/to/image.jpg
+python moderate_image.py /path/to/image.jpg
 ```
 
 ### Check a GIF (frame sampling)
 ```bash
-python3 moderate_image.py /path/to/file.gif --sample-frames 12
+python moderate_image.py /path/to/file.gif --sample-frames 12
 ```
 
 ### Check a URL
 ```bash
-python3 moderate_image.py "https://example.com/image.jpg"
+python moderate_image.py "https://example.com/image.jpg"
 ```
 
 ### Check a directory
 ```bash
-python3 moderate_image.py ./images --recursive
+python moderate_image.py ./images --recursive
 ```
 
 ### Without external APIs
 ```bash
-python3 moderate_image.py ./images --recursive --no-apis
+python moderate_image.py ./images --recursive --no-apis
 ```
 
 With only the base install, optional local vision engines report `skipped` instead of crashing. Install `requirements_local.txt` or `.[local]` when you want local inference.
@@ -197,16 +197,16 @@ Local YOLO forbidden-symbol output is shown with compact numeric scores, for exa
 
 ### Write a JSON report
 ```bash
-python3 moderate_image.py ./images --recursive --json moderation_report.json
+python moderate_image.py ./images --recursive --json moderation_report.json
 ```
 
 ### Benchmark mode
 Benchmark mode measures runtime per file and per engine without changing moderation decisions.
 
 ```bash
-python3 moderate_image.py ./images --recursive --no-apis --benchmark
-python3 moderate_image.py ./images --recursive --no-apis --benchmark-json benchmark.json
-python3 moderate_image.py ./images --recursive --no-apis --json moderation_report.json --benchmark-json benchmark.json
+python moderate_image.py ./images --recursive --no-apis --benchmark
+python moderate_image.py ./images --recursive --no-apis --benchmark-json benchmark.json
+python moderate_image.py ./images --recursive --no-apis --json moderation_report.json --benchmark-json benchmark.json
 ```
 
 Benchmark JSON field `total_wall_ms` includes only wall-clock time spent processing inputs (not time spent writing JSON output files).
@@ -218,18 +218,33 @@ Benchmark JSON field `total_wall_ms` includes only wall-clock time spent process
 ---
 
 ## ✅ Verification
+Core install:
 ```bash
-python3 -m compileall -q .
+python -m pip install -r requirements.txt
+python -m compileall -q .
+python moderate_image.py --help
+python moderate_image.py path/to/test.png --no-apis
+python -m pip check
+```
+
+Dev/test install:
+```bash
+python -m pip install -r requirements_dev.txt
 pytest -q
-python3 moderate_image.py --help
-python3 moderate_image.py path/to/test.png --no-apis
+```
+
+Local/Vision install smoke test:
+```bash
+python -m pip install -r requirements_local.txt
+python -c "import opennsfw2, nudenet, ultralytics, pytesseract"
+python -m pip check
 ```
 
 Expected behavior (short):
-- `python3 -m compileall -q .` → exit code `0` if code is syntactically valid.
+- `python -m compileall -q .` → exit code `0` if code is syntactically valid.
 - `pytest -q` → exit code `0` if tests pass, otherwise non-zero.
-- `python3 moderate_image.py --help` → exit code `0` and shows CLI help.
-- `python3 moderate_image.py path/to/test.png --no-apis` → exit code `0` if the input is `OK`, or `2` if it returns `REVIEW`/`BLOCK`.
+- `python moderate_image.py --help` → exit code `0` and shows CLI help.
+- `python moderate_image.py path/to/test.png --no-apis` → exit code `0` if the input is `OK`, or `2` if it returns `REVIEW`/`BLOCK`.
 
 Optional engines may be missing; they must show up as `skipped`/`disabled` in output instead of aborting execution.
 
@@ -328,8 +343,13 @@ Useful toggles:
 - For GIFs, increase `--sample-frames` if problematic content appears only in a few frames.
 
 ## Troubleshooting
+- `pip install -r requirements.txt` installs nothing or behaves oddly: check that every dependency is on its own line. A damaged requirements file with all dependencies on one line or with dependency lines accidentally commented out is invalid.
+- Unsupported Python version: use Python 3.11 or 3.12. Python 3.13+ may work for some packages, but this project does not promise it and the ML stack may reject it.
+- OpenNSFW2 backend missing: install `requirements_local.txt` or `.[local]`. The project intentionally uses `opennsfw2[tf-keras]`; plain `opennsfw2` can import without having a usable inference backend.
+- OpenNSFW2 native crash: the engine runs prediction in an isolated Python subprocess by default, so TensorFlow/native crashes become a controlled engine error instead of killing the CLI. `OPENNSFW2_IN_PROCESS=1` is available only if you explicitly want the faster, less isolated path.
+- TensorFlow/Keras compatibility: keep the local install in a fresh Python 3.11/3.12 venv. If you previously installed Keras/TensorFlow packages manually, recreate the venv and reinstall `requirements_local.txt`.
 - Tesseract missing: install the system binary and set `TESSERACT_CMD` if it is not on `PATH`. The OCR engine returns `skipped`/controlled `error` instead of crashing.
-- CUDA/GPU not available: set `YOLO_DEVICE=cpu` and `FORBIDDEN_SYMBOLS_YOLO_DEVICE=cpu`.
+- CUDA/GPU not available: the CLI defaults `CUDA_VISIBLE_DEVICES=-1` for process safety. For CPU-only runs you can also set `YOLO_DEVICE=cpu` and `FORBIDDEN_SYMBOLS_YOLO_DEVICE=cpu`; for GPU runs, set `CUDA_VISIBLE_DEVICES` explicitly before starting the CLI.
 - YOLO model missing: set `FORBIDDEN_SYMBOLS_YOLO_MODEL` or `YOLO_WEAPON_MODEL` to an absolute path. Missing optional weights are reported as `skipped`.
 - Git-LFS pointer instead of real `.pt`: run `git lfs pull`; pointer files are detected and skipped with a clear message.
 - API keys missing: `OPENAI_API_KEY`, `SIGHTENGINE_USER`, and `SIGHTENGINE_SECRET` can be omitted. API engines skip cleanly unless enabled credentials are present.

@@ -1,4 +1,5 @@
-# Core runtime dependencies for pHash/image loading and graceful engine skipping.
+# Core runtime dependencies for image/GIF loading, pHash, JSON output,
+# URL loading via stdlib urllib, and graceful skipping of optional engines.
 Pillow>=10.0.0
-numpy>=1.26.0
+numpy>=1.26.0,<2.3
 ImageHash>=4.3.1

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -153,6 +154,10 @@ def get_config(*, reload: bool = False) -> Config:
 
 _USED_DOTENV_PATH, _LOADED_KEYS = load_dotenv_candidates()
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
+# Prefer CPU-safe defaults for optional ML engines. Users who want GPU inference
+# can set CUDA_VISIBLE_DEVICES explicitly in the shell or .env.
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "-1")
+os.environ.setdefault("MPLCONFIGDIR", os.path.join(tempfile.gettempdir(), "modimg-matplotlib"))
 
 
 def project_root() -> str:
