@@ -107,12 +107,12 @@ class OpenAIModerationEngine(Engine):
 
     def _load_cache(self) -> Dict[str, Any]:
         with OpenAIModerationEngine._CACHE_LOCK:
+            path = self._cache_path()
             if OpenAIModerationEngine._CACHE is not None:
                 return OpenAIModerationEngine._CACHE
             if not self._cache_enabled():
                 OpenAIModerationEngine._CACHE = {}
                 return OpenAIModerationEngine._CACHE
-            path = self._cache_path()
             try:
                 if os.path.exists(path):
                     OpenAIModerationEngine._CACHE = json.loads(_read_text(path))
