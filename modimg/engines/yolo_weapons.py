@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import os
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 from ..config import project_root
 from ..enums import EngineStatus
 from ..types import Engine, EngineResult, Frame
-from ..utils import env_float, env_int, now_ms, safe_float01
+from ..utils import env_bool, env_float, env_int, now_ms, safe_float01
 
 _YOLO_CACHE: Dict[Tuple[str, str], Any] = {}
+_YOLO_CACHE_LOCK = threading.RLock()
 _PLACEHOLDER_NAMES = {"yolo-world", "yolo_world"}
 
 
@@ -92,13 +94,71 @@ def _resolve_model_reference() -> Tuple[str, bool, str | None]:
 def _load_model(model_ref: str) -> Any:
     backend = os.getenv("YOLO_BACKEND", "ultralytics").strip().lower()
     key = (backend, model_ref)
-    if key in _YOLO_CACHE:
-        return _YOLO_CACHE[key]
-    from ultralytics import YOLO  # heavy import
+    with _YOLO_CACHE_LOCK:
+        if key in _YOLO_CACHE:
+            return _YOLO_CACHE[key]
 
-    mdl = YOLO(model_ref)
-    _YOLO_CACHE[key] = mdl
-    return mdl
+        from ultralytics import YOLO  # heavy import
+
+        _YOLO_CACHE[key] = YOLO(model_ref)
+        return _YOLO_CACHE[key]
+
+
+def _predict(
+    model: Any,
+    image_or_images: Any,
+    *,
+    conf: float,
+    iou: float,
+    imgsz: int,
+    max_det: int,
+    device: str | None,
+    batch: int | None = None,
+) -> Any:
+    kwargs: Dict[str, Any] = {
+        "conf": conf,
+        "iou": iou,
+        "imgsz": imgsz,
+        "max_det": max_det,
+        "verbose": False,
+    }
+    if device is not None:
+        kwargs["device"] = device
+    if batch is not None:
+        kwargs["batch"] = batch
+
+    variants: list[Dict[str, Any]] = [dict(kwargs)]
+    if "batch" in kwargs:
+        without_batch = dict(kwargs)
+        without_batch.pop("batch", None)
+        variants.append(without_batch)
+    without_imgsz = dict(variants[-1])
+    without_imgsz.pop("imgsz", None)
+    variants.append(without_imgsz)
+    without_max_det = dict(without_imgsz)
+    without_max_det.pop("max_det", None)
+    variants.append(without_max_det)
+
+    last_type_error: TypeError | None = None
+    for variant in variants:
+        try:
+            return model.predict(image_or_images, **variant)
+        except TypeError as exc:
+            last_type_error = exc
+    if last_type_error is not None:
+        raise last_type_error
+    return model.predict(image_or_images, **kwargs)
+
+
+def _results_list(results: Any) -> list[Any]:
+    if results is None:
+        return []
+    if isinstance(results, list):
+        return results
+    try:
+        return list(results)
+    except TypeError:
+        return [results]
 
 
 class YOLOWorldWeaponsEngine(Engine):
@@ -125,12 +185,6 @@ class YOLOWorldWeaponsEngine(Engine):
                 took_ms=now_ms() - start,
             )
 
-        ok, why = self.available()
-        if not ok:
-            return EngineResult(
-                name=self.name, status=EngineStatus.SKIPPED, error=why, details={"model": model_ref}, took_ms=now_ms() - start
-            )
-
         mdl = _load_model(model_ref)
         conf = env_float("YOLO_CONF", 0.25, min_value=0.0, max_value=1.0)
         iou = env_float("YOLO_IOU", 0.45, min_value=0.0, max_value=1.0)
@@ -139,6 +193,7 @@ class YOLOWorldWeaponsEngine(Engine):
         device = os.getenv("YOLO_DEVICE", "").strip() or None
         max_frames = env_int("YOLO_MAX_FRAMES", 2)
         use = frames[:max_frames] if max_frames > 0 else frames[:1]
+        batch_enabled = env_bool("YOLO_BATCH_ENABLE", True)
 
         firearm = firearm_real = firearm_toy = 0.0
         knife = knife_danger = 0.0
@@ -152,22 +207,15 @@ class YOLOWorldWeaponsEngine(Engine):
                 return str(names[int(cls_id)])
             return ""
 
-        for fr in use:
-            try:
-                res = mdl.predict(fr.pil, conf=conf, iou=iou, imgsz=imgsz, max_det=max_det, device=device, verbose=False)
-            except TypeError:
-                res = mdl.predict(fr.pil, conf=conf, iou=iou, max_det=max_det, device=device, verbose=False)
-
-            if not res:
-                continue
-            r0 = res[0]
+        def _consume_result(r0: Any) -> None:
+            nonlocal firearm, firearm_real, firearm_toy, knife, knife_danger
             boxes = getattr(r0, "boxes", None)
             if boxes is None:
-                continue
+                return
             cls_ids = getattr(boxes, "cls", None)
             confs = getattr(boxes, "conf", None)
             if cls_ids is None or confs is None:
-                continue
+                return
             try:
                 cls_list = cls_ids.tolist()
                 conf_list = confs.tolist()
@@ -187,6 +235,37 @@ class YOLOWorldWeaponsEngine(Engine):
                     knife = max(knife, p)
                     knife_danger = max(knife_danger, p)
 
+        if batch_enabled and len(use) > 1:
+            images = [fr.pil.convert("RGB") for fr in use]
+            try:
+                batch_results = _results_list(
+                    _predict(
+                        mdl,
+                        images,
+                        conf=conf,
+                        iou=iou,
+                        imgsz=imgsz,
+                        max_det=max_det,
+                        device=device,
+                        batch=len(images),
+                    )
+                )
+            except TypeError:
+                batch_results = []
+                for image in images:
+                    batch_results.extend(
+                        _results_list(
+                            _predict(mdl, image, conf=conf, iou=iou, imgsz=imgsz, max_det=max_det, device=device)
+                        )
+                    )
+            for result in batch_results[: len(use)]:
+                _consume_result(result)
+        else:
+            for fr in use:
+                image = fr.pil.convert("RGB")
+                for result in _results_list(_predict(mdl, image, conf=conf, iou=iou, imgsz=imgsz, max_det=max_det, device=device)):
+                    _consume_result(result)
+
         firearm_any = max(firearm, firearm_real, firearm_toy)
 
         return EngineResult(
@@ -200,6 +279,6 @@ class YOLOWorldWeaponsEngine(Engine):
                 "yolo_knife_dangerous": safe_float01(knife_danger),
                 "yolo_firearm_any": safe_float01(firearm_any),
             },
-            details={"model": model_ref, "explicit_model": explicit},
+            details={"model": model_ref, "explicit_model": explicit, "batch_enabled": bool(batch_enabled and len(use) > 1)},
             took_ms=now_ms() - start,
         )

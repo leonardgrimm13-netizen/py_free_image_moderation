@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import json
+import threading
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..enums import EngineStatus
@@ -11,6 +12,9 @@ from ..utils import now_ms
 
 class SightengineEngine(Engine):
     name = "Sightengine"
+    _SESSION_LOCK = threading.RLock()
+    _SESSION: Any = None
+    _SESSION_MODULE_ID: int | None = None
 
     def __init__(self, models: Optional[str] = None) -> None:
         super().__init__()
@@ -62,6 +66,19 @@ class SightengineEngine(Engine):
         self.api_user = os.getenv("SIGHTENGINE_USER", "").strip()
         self.api_secret = os.getenv("SIGHTENGINE_SECRET", "").strip()
 
+    @classmethod
+    def _session(cls) -> Any:
+        import requests  # type: ignore
+
+        module_id = id(requests)
+        with cls._SESSION_LOCK:
+            if cls._SESSION is not None and cls._SESSION_MODULE_ID == module_id:
+                return cls._SESSION
+            session_factory = getattr(requests, "Session", None)
+            cls._SESSION = session_factory() if callable(session_factory) else requests
+            cls._SESSION_MODULE_ID = module_id
+            return cls._SESSION
+
     def available(self) -> Tuple[bool, str]:
         # Ensure attributes exist + pick up any late env changes
         self._refresh_creds()
@@ -76,7 +93,7 @@ class SightengineEngine(Engine):
             return EngineResult(name=self.name, status=EngineStatus.SKIPPED, error=why, took_ms=now_ms() - start)
 
         try:
-            import requests  # type: ignore
+            session = self._session()
         except Exception as e:
             return EngineResult(name=self.name, status=EngineStatus.SKIPPED, error=f"missing dependency (pip install -U requests): {e}", took_ms=now_ms() - start)
 
@@ -255,7 +272,7 @@ class SightengineEngine(Engine):
         for fr in use_frames:
             files = {"media": ("frame.jpg", fr.get_jpeg_bytes(), "image/jpeg")}
             try:
-                r = requests.post(url, data=params_base, files=files, timeout=60)
+                r = session.post(url, data=params_base, files=files, timeout=60)
             except Exception as exc:
                 return EngineResult(
                     name=self.name,

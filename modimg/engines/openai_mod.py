@@ -55,6 +55,11 @@ class OpenAIModerationEngine(Engine):
     # If we detect a permanent auth problem (401/403), disable OpenAI for the remainder of the run
     _DISABLED_REASON: Optional[str] = None
 
+    _CLIENT_LOCK = threading.RLock()
+    _CLIENT: Optional[Any] = None
+    _CLIENT_TIMEOUT: Optional[float] = None
+    _CLIENT_API_KEY: Optional[str] = None
+
     def __init__(self, extra_text: str = "") -> None:
         super().__init__()
         self.extra_text = (extra_text or "").strip()
@@ -259,6 +264,19 @@ class OpenAIModerationEngine(Engine):
             h.update(hashlib.sha256(fr.get_jpeg_bytes()).digest())
         return h.hexdigest()
 
+    @classmethod
+    def _client_for_timeout(cls, timeout: float):
+        api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
+        with cls._CLIENT_LOCK:
+            if cls._CLIENT is not None and cls._CLIENT_TIMEOUT == timeout and cls._CLIENT_API_KEY == api_key:
+                return cls._CLIENT
+            from openai import OpenAI
+
+            cls._CLIENT = OpenAI(timeout=timeout)
+            cls._CLIENT_TIMEOUT = timeout
+            cls._CLIENT_API_KEY = api_key
+            return cls._CLIENT
+
     def run(self, path: str, frames: List[Frame], max_api_frames: int = 3) -> EngineResult:
         start = now_ms()
         ok, why = self.available()
@@ -268,11 +286,9 @@ class OpenAIModerationEngine(Engine):
             return EngineResult(name=self.name, status=EngineStatus.SKIPPED, error="no frames", took_ms=now_ms() - start)
 
         try:
-            from openai import OpenAI
-
             # Client timeout (prevents extremely long hangs)
             timeout = env_float("OPENAI_REQUEST_TIMEOUT_SEC", 20.0, min_value=0.1)
-            client = OpenAI(timeout=timeout)
+            client = self._client_for_timeout(timeout)
 
             use_n = max(1, int(max_api_frames or 1))
             use_frames = frames[:use_n]

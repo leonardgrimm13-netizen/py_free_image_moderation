@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 
@@ -18,6 +19,7 @@ except Exception:
 _PHASH_DCT_CACHE: Dict[int, np.ndarray] = {}
 _PHASH_LIST_CACHE: Dict[str, Tuple[float, List[Tuple[str, str, int, int]]]] = {}
 _PHASH_EXACT_CACHE: Dict[str, Tuple[float, Dict[int, Dict[int, Tuple[str, str]]]]] = {}
+_PHASH_CACHE_LOCK = threading.RLock()
 
 def project_root() -> str:
     # parent of modimg
@@ -45,37 +47,39 @@ def _phash_cache_invalidate(path: str) -> None:
         p = resolve_list_path(path)
     except Exception:
         p = path
-    _PHASH_LIST_CACHE.pop(p, None)
-    _PHASH_EXACT_CACHE.pop(p, None)
+    with _PHASH_CACHE_LOCK:
+        _PHASH_LIST_CACHE.pop(p, None)
+        _PHASH_EXACT_CACHE.pop(p, None)
 
 def _append_phash_to_list(phash_hex: str, list_path: str, label: str) -> bool:
     list_path = resolve_list_path(list_path)
     phash_hex = (phash_hex or "").strip().lower()
     if not phash_hex:
         return False
-    try:
-        os.makedirs(os.path.dirname(os.path.abspath(list_path)), exist_ok=True)
-    except Exception:
-        pass
-    try:
-        existing = set()
-        if os.path.exists(list_path):
-            with open(list_path, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line or line.startswith("#"):
-                        continue
-                    h = line.split(",", 1)[0].strip().lower()
-                    if h:
-                        existing.add(h)
-        if phash_hex in existing:
+    with _PHASH_CACHE_LOCK:
+        try:
+            os.makedirs(os.path.dirname(os.path.abspath(list_path)), exist_ok=True)
+        except Exception:
+            pass
+        try:
+            existing = set()
+            if os.path.exists(list_path):
+                with open(list_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line or line.startswith("#"):
+                            continue
+                        h = line.split(",", 1)[0].strip().lower()
+                        if h:
+                            existing.add(h)
+            if phash_hex in existing:
+                return False
+            with open(list_path, "a", encoding="utf-8") as f:
+                f.write(f"{phash_hex},{label}\n")
+            _phash_cache_invalidate(list_path)
+            return True
+        except Exception:
             return False
-        with open(list_path, "a", encoding="utf-8") as f:
-            f.write(f"{phash_hex},{label}\n")
-        _phash_cache_invalidate(list_path)
-        return True
-    except Exception:
-        return False
 
 
 def append_phash_to_allowlist(phash_hex: str, allowlist_path: str, label: str) -> bool:
@@ -86,16 +90,21 @@ def append_phash_to_blocklist(phash_hex: str, blocklist_path: str, label: str) -
     return _append_phash_to_list(phash_hex, blocklist_path, label)
 
 def _dct_matrix(n: int) -> np.ndarray:
-    m = _PHASH_DCT_CACHE.get(n)
-    if m is not None:
-        return m
+    with _PHASH_CACHE_LOCK:
+        m = _PHASH_DCT_CACHE.get(n)
+        if m is not None:
+            return m
     x = np.arange(n, dtype=np.float32)
     k = x.reshape((n, 1))
     mat = np.cos((np.pi * (2.0 * x + 1.0) * k) / (2.0 * n)).astype(np.float32)
     mat[0, :] *= (1.0 / np.sqrt(n))
     mat[1:, :] *= (np.sqrt(2.0 / n))
-    _PHASH_DCT_CACHE[n] = mat
-    return mat
+    with _PHASH_CACHE_LOCK:
+        cached = _PHASH_DCT_CACHE.get(n)
+        if cached is not None:
+            return cached
+        _PHASH_DCT_CACHE[n] = mat
+        return mat
 
 def phash_hex_from_pil(img: Image.Image, hash_size: int = 8, highfreq_factor: int = 4) -> str:
     if _imagehash is not None:
@@ -139,9 +148,10 @@ def load_phash_list(path: str, default_label: str) -> List[Tuple[str, str, int, 
         mtime = os.path.getmtime(path)
     except Exception:
         return []
-    cached = _PHASH_LIST_CACHE.get(path)
-    if cached and cached[0] == mtime:
-        return cached[1]
+    with _PHASH_CACHE_LOCK:
+        cached = _PHASH_LIST_CACHE.get(path)
+        if cached and cached[0] == mtime:
+            return cached[1]
     out: List[Tuple[str, str, int, int]] = []
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -161,7 +171,8 @@ def load_phash_list(path: str, default_label: str) -> List[Tuple[str, str, int, 
                 out.append((hx, label, iv, len(hx)))
     except Exception:
         out = []
-    _PHASH_LIST_CACHE[path] = (mtime, out)
+    with _PHASH_CACHE_LOCK:
+        _PHASH_LIST_CACHE[path] = (mtime, out)
     return out
 
 
@@ -172,14 +183,16 @@ def load_phash_exact_map(path: str, default_label: str) -> Dict[int, Dict[int, T
         mtime = os.path.getmtime(path)
     except Exception:
         return {}
-    cached = _PHASH_EXACT_CACHE.get(path)
-    if cached and cached[0] == mtime:
-        return cached[1]
+    with _PHASH_CACHE_LOCK:
+        cached = _PHASH_EXACT_CACHE.get(path)
+        if cached and cached[0] == mtime:
+            return cached[1]
     mp: Dict[int, Dict[int, Tuple[str, str]]] = {}
     entries = load_phash_list(path, default_label=default_label)
     for hx, label, iv, hlen in entries:
         mp.setdefault(hlen, {})[iv] = (hx, label)
-    _PHASH_EXACT_CACHE[path] = (mtime, mp)
+    with _PHASH_CACHE_LOCK:
+        _PHASH_EXACT_CACHE[path] = (mtime, mp)
     return mp
 
 def best_match_distance(phash_int: int, phash_hex_len: int, entries: List[Tuple[str, str, int, int]], max_distance: int) -> Optional[Tuple[int, str, str]]:

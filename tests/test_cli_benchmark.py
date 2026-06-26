@@ -11,6 +11,22 @@ def _make_image(path) -> None:
     Image.new("RGB", (16, 16), color=(50, 100, 150)).save(path)
 
 
+def _light_env(tmp_path) -> dict[str, str]:
+    import os
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "OPENNSFW2_DISABLE": "1",
+            "NUDENET_DISABLE": "1",
+            "OCR_ENABLE": "0",
+            "FORBIDDEN_SYMBOLS_YOLO_ENABLE": "0",
+            "YOLO_WEAPON_MODEL": str(tmp_path / "missing-weapons.pt"),
+        }
+    )
+    return env
+
+
 def test_cli_benchmark_json_file(tmp_path) -> None:
     img_path = tmp_path / "sample.png"
     bench_path = tmp_path / "benchmark.json"
@@ -23,6 +39,7 @@ def test_cli_benchmark_json_file(tmp_path) -> None:
         text=True,
         encoding="utf-8",
         errors="replace",
+        env=_light_env(tmp_path),
     )
 
     combined = f"{proc.stdout}\n{proc.stderr}"
@@ -52,6 +69,7 @@ def test_cli_benchmark_console_does_not_crash(tmp_path) -> None:
         text=True,
         encoding="utf-8",
         errors="replace",
+        env=_light_env(tmp_path),
     )
 
     combined = f"{proc.stdout}\n{proc.stderr}"
@@ -74,6 +92,7 @@ def test_cli_benchmark_does_not_change_old_json_single_report(tmp_path) -> None:
         text=True,
         encoding="utf-8",
         errors="replace",
+        env=_light_env(tmp_path),
     )
 
     assert proc.returncode in (0, 2)
@@ -110,6 +129,7 @@ def test_cli_benchmark_still_does_not_change_old_json_single_report(tmp_path) ->
         text=True,
         encoding="utf-8",
         errors="replace",
+        env=_light_env(tmp_path),
     )
 
     assert proc.returncode in (0, 2)

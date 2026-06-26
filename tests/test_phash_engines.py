@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+
 from PIL import Image
 
 from modimg.engines.phash_allow import PHashAllowlistEngine
 from modimg.engines.phash_block import PHashBlocklistEngine
 from modimg.enums import EngineStatus, VerdictLabel
-from modimg.phash import frame_phash_hex_int, resolve_list_path
+from modimg.phash import append_phash_to_allowlist, frame_phash_hex_int, load_phash_exact_map, load_phash_list, resolve_list_path
 from modimg.types import Frame
 from modimg.verdict import compute_verdict
 
@@ -83,3 +85,36 @@ def test_resolve_list_path_expands_user(monkeypatch, tmp_path) -> None:
     resolved = resolve_list_path("~/allow.txt")
 
     assert resolved == str(tmp_path / "allow.txt")
+
+
+def test_phash_caches_can_be_used_from_multiple_threads(tmp_path) -> None:
+    frame = _frame()
+    hx, _ = frame_phash_hex_int(frame)
+    phash_list = tmp_path / "list.txt"
+    phash_list.write_text(f"{hx},known\n", encoding="utf-8")
+
+    def work(i: int) -> tuple[str, int, int]:
+        local_frame = Frame(idx=i, pil=Image.new("RGB", (16, 16), color=(1, 2, 3)))
+        local_hx, _ = frame_phash_hex_int(local_frame)
+        entries = load_phash_list(str(phash_list), default_label="known")
+        exact = load_phash_exact_map(str(phash_list), default_label="known")
+        return local_hx, len(entries), len(exact)
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        results = list(executor.map(work, range(32)))
+
+    assert all(local_hx == hx for local_hx, _, _ in results)
+    assert all(entry_count == 1 for _, entry_count, _ in results)
+    assert all(exact_count == 1 for _, _, exact_count in results)
+
+
+def test_parallel_phash_append_does_not_duplicate_entries(tmp_path) -> None:
+    allowlist = tmp_path / "allow.txt"
+    hx = "0123456789abcdef"
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        results = list(executor.map(lambda _: append_phash_to_allowlist(hx, str(allowlist), "known"), range(32)))
+
+    lines = [line for line in allowlist.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert lines == [f"{hx},known"]
+    assert results.count(True) == 1
