@@ -44,6 +44,38 @@ def test_phash_blocklist_match_returns_block_verdict(tmp_path) -> None:
     assert verdict.label == VerdictLabel.BLOCK
 
 
+def test_empty_phash_blocklist_skips_without_hashing(monkeypatch, tmp_path) -> None:
+    frame = _frame()
+    blocklist = tmp_path / "block.txt"
+    blocklist.write_text("# empty\n", encoding="utf-8")
+
+    def fail_hash(_frame: Frame) -> tuple[str, int]:
+        raise AssertionError("empty blocklist should skip before hashing frames")
+
+    monkeypatch.setattr("modimg.engines.phash_block.ph.frame_phash_hex_int", fail_hash)
+
+    result = PHashBlocklistEngine(blocklist_path=str(blocklist)).execute("sample.png", [frame])
+
+    assert result.status == EngineStatus.SKIPPED
+    assert result.error == "blocklist empty"
+
+
+def test_empty_phash_allowlist_skips_without_hashing(monkeypatch, tmp_path) -> None:
+    frame = _frame()
+    allowlist = tmp_path / "allow.txt"
+    allowlist.write_text("# empty\n", encoding="utf-8")
+
+    def fail_hash(_frame: Frame) -> tuple[str, int]:
+        raise AssertionError("empty allowlist should skip before hashing frames")
+
+    monkeypatch.setattr("modimg.engines.phash_allow.ph.frame_phash_hex_int", fail_hash)
+
+    result = PHashAllowlistEngine(allowlist_path=str(allowlist)).execute("sample.png", [frame])
+
+    assert result.status == EngineStatus.SKIPPED
+    assert result.error == "allowlist empty"
+
+
 def test_resolve_list_path_expands_user(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.setenv("HOME", str(tmp_path))

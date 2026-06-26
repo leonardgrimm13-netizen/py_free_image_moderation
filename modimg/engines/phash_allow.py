@@ -40,17 +40,16 @@ class PHashAllowlistEngine(Engine):
         if not ok:
             return EngineResult(name=self.name, status=EngineStatus.SKIPPED, error=why, took_ms=now_ms() - start)
 
-        fr_first = frames[0]
-        fr_last = frames[-1]
-        first_hex, first_int = ph.frame_phash_hex_int(fr_first)
-        last_hex, last_int = ph.frame_phash_hex_int(fr_last)
-
         best: Optional[tuple[int, str, str, str]] = None  # (dist, hex, label, which)
 
         if self.max_distance <= 0:
             mp = ph.load_phash_exact_map(self.allowlist_path, default_label="allow")
             if not mp:
                 return EngineResult(name=self.name, status=EngineStatus.SKIPPED, error="allowlist empty", took_ms=now_ms() - start)
+            fr_first = frames[0]
+            fr_last = frames[-1]
+            first_hex, first_int = ph.frame_phash_hex_int(fr_first)
+            last_hex, last_int = ph.frame_phash_hex_int(fr_last)
             found = mp.get(len(first_hex), {}).get(first_int)
             if found is not None:
                 best = (0, found[0], found[1], "first")
@@ -61,6 +60,10 @@ class PHashAllowlistEngine(Engine):
             entries = ph.load_phash_list(self.allowlist_path, default_label="allow")
             if not entries:
                 return EngineResult(name=self.name, status=EngineStatus.SKIPPED, error="allowlist empty", took_ms=now_ms() - start)
+            fr_first = frames[0]
+            fr_last = frames[-1]
+            first_hex, first_int = ph.frame_phash_hex_int(fr_first)
+            last_hex, last_int = ph.frame_phash_hex_int(fr_last)
             bm = ph.best_match_distance(first_int, len(first_hex), entries, self.max_distance)
             if bm is not None:
                 best = (bm[0], bm[1], bm[2], "first")
