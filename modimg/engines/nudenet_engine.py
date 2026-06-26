@@ -7,7 +7,7 @@ from PIL import Image
 
 from ..enums import EngineStatus
 from ..types import Engine, EngineResult
-from ..utils import now_ms
+from ..utils import env_bool, now_ms
 
 class NudeNetEngine(Engine):
     """Offline nudity detection via NudeNet (optional)."""
@@ -16,7 +16,7 @@ class NudeNetEngine(Engine):
     _DETECTOR = None
 
     def available(self) -> Tuple[bool, str]:
-        if (os.getenv("NUDENET_DISABLE", "0") or "0").strip() == "1":
+        if env_bool("NUDENET_DISABLE", False):
             return False, "disabled via NUDENET_DISABLE=1"
         try:
             from nudenet import NudeDetector  # noqa: F401

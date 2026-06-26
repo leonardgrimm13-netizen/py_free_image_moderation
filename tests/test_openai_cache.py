@@ -7,6 +7,16 @@ from modimg.engines.openai_mod import OpenAIModerationEngine
 from modimg.types import Frame
 
 
+def _reset_cache_state() -> None:
+    OpenAIModerationEngine._CACHE = None
+    OpenAIModerationEngine._CACHE_PATH = None
+    OpenAIModerationEngine._CACHE_DIR_READY = False
+    OpenAIModerationEngine._CACHE_DIRTY = False
+    OpenAIModerationEngine._CACHE_WRITES_SINCE_FLUSH = 0
+    OpenAIModerationEngine._CACHE_DIR_ERROR = False
+    OpenAIModerationEngine._CACHE_DIR_ERROR_REASON = None
+
+
 def test_openai_cache_save_is_reentrant_under_cache_lock(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("OPENAI_CACHE_ENABLE", "1")
     monkeypatch.setenv("OPENAI_CACHE_PATH", str(tmp_path / "openai_cache.json"))
@@ -23,6 +33,37 @@ def test_openai_cache_save_is_reentrant_under_cache_lock(monkeypatch, tmp_path) 
         eng._save_cache(force=True)
 
     assert (tmp_path / "openai_cache.json").exists()
+
+
+def test_openai_load_cache_reloads_after_cache_path_change(monkeypatch, tmp_path) -> None:
+    first = tmp_path / "first.json"
+    second = tmp_path / "second.json"
+    first.write_text('{"old": {"scores": {"x": 1.0}, "details": {}}}', encoding="utf-8")
+    second.write_text('{"new": {"scores": {"y": 2.0}, "details": {}}}', encoding="utf-8")
+    monkeypatch.setenv("OPENAI_CACHE_PATH", str(first))
+    monkeypatch.setenv("OPENAI_CACHE_ENABLE", "1")
+    _reset_cache_state()
+
+    eng = OpenAIModerationEngine()
+    first_cache = eng._load_cache()
+    assert "old" in first_cache
+    assert "new" not in first_cache
+    assert OpenAIModerationEngine._CACHE_PATH == str(first)
+
+    OpenAIModerationEngine._CACHE_DIR_READY = True
+    OpenAIModerationEngine._CACHE_DIRTY = True
+    OpenAIModerationEngine._CACHE_WRITES_SINCE_FLUSH = 1
+
+    monkeypatch.setenv("OPENAI_CACHE_PATH", str(second))
+
+    second_cache = eng._load_cache()
+
+    assert second_cache == {"new": {"scores": {"y": 2.0}, "details": {}}}
+    assert "old" not in second_cache
+    assert OpenAIModerationEngine._CACHE_PATH == str(second)
+    assert OpenAIModerationEngine._CACHE_DIR_READY is False
+    assert OpenAIModerationEngine._CACHE_DIRTY is False
+    assert OpenAIModerationEngine._CACHE_WRITES_SINCE_FLUSH == 0
 
 
 def test_openai_missing_api_key_is_skipped(monkeypatch) -> None:

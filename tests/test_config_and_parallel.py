@@ -203,3 +203,11 @@ def test_json_safe_handles_paths_numpy_and_non_finite_values(tmp_path) -> None:
     dumped = json_dumps_safe(payload, allow_nan=False)
     assert "NaN" not in dumped
     assert math.isclose(normalized["np_float"], 0.25, rel_tol=1e-6)
+
+
+def test_parse_label_float_map_ignores_invalid_values() -> None:
+    from modimg.utils import parse_label_float_map
+
+    parsed = parse_label_float_map("isis:0.75, broken, swastika:1.4, bad:nan, antifa:-1")
+
+    assert parsed == {"isis": 0.75, "swastika": 1.0, "antifa": 0.0}

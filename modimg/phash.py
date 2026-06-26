@@ -48,19 +48,19 @@ def _phash_cache_invalidate(path: str) -> None:
     _PHASH_LIST_CACHE.pop(p, None)
     _PHASH_EXACT_CACHE.pop(p, None)
 
-def append_phash_to_allowlist(phash_hex: str, allowlist_path: str, label: str) -> bool:
-    allowlist_path = resolve_list_path(allowlist_path)
+def _append_phash_to_list(phash_hex: str, list_path: str, label: str) -> bool:
+    list_path = resolve_list_path(list_path)
     phash_hex = (phash_hex or "").strip().lower()
     if not phash_hex:
         return False
     try:
-        os.makedirs(os.path.dirname(os.path.abspath(allowlist_path)), exist_ok=True)
+        os.makedirs(os.path.dirname(os.path.abspath(list_path)), exist_ok=True)
     except Exception:
         pass
     try:
         existing = set()
-        if os.path.exists(allowlist_path):
-            with open(allowlist_path, "r", encoding="utf-8") as f:
+        if os.path.exists(list_path):
+            with open(list_path, "r", encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
                     if not line or line.startswith("#"):
@@ -70,41 +70,20 @@ def append_phash_to_allowlist(phash_hex: str, allowlist_path: str, label: str) -
                         existing.add(h)
         if phash_hex in existing:
             return False
-        with open(allowlist_path, "a", encoding="utf-8") as f:
+        with open(list_path, "a", encoding="utf-8") as f:
             f.write(f"{phash_hex},{label}\n")
-        _phash_cache_invalidate(allowlist_path)
+        _phash_cache_invalidate(list_path)
         return True
     except Exception:
         return False
 
+
+def append_phash_to_allowlist(phash_hex: str, allowlist_path: str, label: str) -> bool:
+    return _append_phash_to_list(phash_hex, allowlist_path, label)
+
+
 def append_phash_to_blocklist(phash_hex: str, blocklist_path: str, label: str) -> bool:
-    blocklist_path = resolve_list_path(blocklist_path)
-    phash_hex = (phash_hex or "").strip().lower()
-    if not phash_hex:
-        return False
-    try:
-        os.makedirs(os.path.dirname(os.path.abspath(blocklist_path)), exist_ok=True)
-    except Exception:
-        pass
-    try:
-        existing = set()
-        if os.path.exists(blocklist_path):
-            with open(blocklist_path, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line or line.startswith("#"):
-                        continue
-                    h = line.split(",", 1)[0].strip().lower()
-                    if h:
-                        existing.add(h)
-        if phash_hex in existing:
-            return False
-        with open(blocklist_path, "a", encoding="utf-8") as f:
-            f.write(f"{phash_hex},{label}\n")
-        _phash_cache_invalidate(blocklist_path)
-        return True
-    except Exception:
-        return False
+    return _append_phash_to_list(phash_hex, blocklist_path, label)
 
 def _dct_matrix(n: int) -> np.ndarray:
     m = _PHASH_DCT_CACHE.get(n)

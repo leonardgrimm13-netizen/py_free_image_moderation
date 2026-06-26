@@ -76,6 +76,36 @@ def env_label_set(name: str, default: str = "") -> set[str]:
     return {x.strip().lower() for x in str(raw).split(",") if x.strip()}
 
 
+def parse_label_float_map(raw: Any, *, min_value: float = 0.0, max_value: float = 1.0) -> dict[str, float]:
+    """Parse comma-separated ``label:value`` entries into a normalized mapping.
+
+    Invalid entries are ignored. Values are clamped to the supplied bounds so a
+    typo in configuration cannot produce impossible confidence thresholds.
+    """
+    out: dict[str, float] = {}
+    for item in str(raw or "").split(","):
+        item = item.strip()
+        if not item or ":" not in item:
+            continue
+        label, value = item.split(":", 1)
+        label = label.strip().lower()
+        if not label:
+            continue
+        try:
+            parsed = float(value.strip())
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(parsed):
+            continue
+        out[label] = max(float(min_value), min(float(max_value), parsed))
+    return out
+
+
+def env_label_float_map(name: str, default: str = "", *, min_value: float = 0.0, max_value: float = 1.0) -> dict[str, float]:
+    """Read a comma-separated env var of ``label:value`` confidence thresholds."""
+    return parse_label_float_map(os.getenv(name, default), min_value=min_value, max_value=max_value)
+
+
 def status_value(status: Any) -> str:
     """Return a lowercase engine status string for enums and legacy strings."""
     return str(status.value if hasattr(status, "value") else status).lower()

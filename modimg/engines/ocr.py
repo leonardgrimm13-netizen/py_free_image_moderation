@@ -7,7 +7,7 @@ from typing import List, Tuple
 
 from ..enums import EngineStatus
 from ..types import Engine, EngineResult, Frame
-from ..utils import env_int, now_ms
+from ..utils import env_bool, env_int, now_ms
 from ..config import project_root
 
 class OCREngine(Engine):
@@ -21,7 +21,7 @@ class OCREngine(Engine):
         self.blocklist_path = os.path.join(project_root(), "data", "ocr_text_blocklist.txt")
 
     def available(self) -> Tuple[bool, str]:
-        if os.getenv("OCR_ENABLE", "0").strip() != "1":
+        if not env_bool("OCR_ENABLE", False):
             return False, "disabled (set OCR_ENABLE=1)"
         try:
             import pytesseract  # noqa

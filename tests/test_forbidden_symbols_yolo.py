@@ -168,6 +168,25 @@ def test_forbidden_symbols_engine_mock_high_confidence_blocks(monkeypatch, tmp_p
     assert result.scores["forbidden_symbols_block_hit"] == 1.0
 
 
+def test_forbidden_symbols_engine_label_specific_block_threshold(monkeypatch, tmp_path) -> None:
+    model = tmp_path / "model.pt"
+    model.write_bytes(b"not a model pointer" * 200)
+    FakeYOLO.confidence = 0.72
+    fake_module = types.SimpleNamespace(YOLO=FakeYOLO)
+    monkeypatch.setitem(sys.modules, "ultralytics", fake_module)
+    monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_ENABLE", "1")
+    monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_MODEL", str(model))
+    monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_BLOCK_CONF", "0.90")
+    monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_LABEL_BLOCK_CONF", "test_symbol:0.70")
+
+    result = YOLOForbiddenSymbolsEngine().execute("dummy.png", _frame())
+
+    assert result.status == EngineStatus.OK
+    assert result.scores["forbidden_symbols_max_conf"] == pytest.approx(0.72)
+    assert result.scores["forbidden_symbols_block_hit"] == 1.0
+    assert result.details["block_detection"]["label"] == "test_symbol"
+
+
 def test_forbidden_symbols_engine_ignore_labels(monkeypatch, tmp_path) -> None:
     model = tmp_path / "model.pt"
     model.write_bytes(b"not a model pointer" * 200)
@@ -210,6 +229,17 @@ def test_verdict_forbidden_symbols_review(monkeypatch) -> None:
     verdict = compute_verdict([_yolo_result(0.72)])
     assert verdict.label == VerdictLabel.REVIEW
     assert any("possible forbidden symbol" in reason for reason in verdict.reasons)
+
+
+def test_verdict_forbidden_symbols_label_specific_block(monkeypatch) -> None:
+    monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_BLOCK_CONF", "0.90")
+    monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_LABEL_BLOCK_CONF", "test_symbol:0.70")
+
+    verdict = compute_verdict([_yolo_result(0.72)])
+
+    assert verdict.label == VerdictLabel.BLOCK
+    assert verdict.hate_risk >= 1.0
+    assert any("test_symbol" in reason for reason in verdict.reasons)
 
 
 def test_verdict_forbidden_symbols_below_threshold(monkeypatch) -> None:
