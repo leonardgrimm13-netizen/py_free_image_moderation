@@ -231,8 +231,6 @@ def main(argv: List[str] | None = None) -> int:
                 benchmark_items.append(benchmark_item)
             _print_report(rep)
             reports.append(_serialize_report(rep))
-        if benchmark_enabled:
-            processing_wall_ms = sum(int(item.get("total_ms", 0) or 0) for item in benchmark_items)
     else:
         completed_map: Dict[int, Tuple[int, Dict[str, Any], Dict[str, Any] | None]] = {}
         with ThreadPoolExecutor(max_workers=min(file_workers, len(inputs))) as executor:
@@ -256,14 +254,15 @@ def main(argv: List[str] | None = None) -> int:
                     benchmark_item = collect_benchmark_item(rep, 0) if benchmark_enabled else None
                     completed_map[idx] = (idx, rep, benchmark_item)
         completed = [completed_map[idx] for idx in range(len(inputs))]
-        if benchmark_enabled:
-            processing_wall_ms = int((time.perf_counter() - bench_start) * 1000) if bench_start is not None else None
 
         for _, rep, benchmark_item in completed:
             if benchmark_item is not None:
                 benchmark_items.append(benchmark_item)
             _print_report(rep)
             reports.append(_serialize_report(rep))
+
+    if benchmark_enabled:
+        processing_wall_ms = int((time.perf_counter() - bench_start) * 1000) if bench_start is not None else None
 
     benchmark_summary = None
     if benchmark_enabled:

@@ -28,7 +28,7 @@ class OpenNSFW2Engine(Engine):
     def _in_process_mode() -> str:
         raw = os.getenv("OPENNSFW2_IN_PROCESS")
         if raw is None or str(raw).strip() == "":
-            return "1"
+            return "0"
         value = str(raw).strip().lower()
         if value == "auto":
             return "auto"
@@ -36,7 +36,7 @@ class OpenNSFW2Engine(Engine):
             return "1"
         if value in ("0", "false", "no", "off"):
             return "0"
-        return "1"
+        return "0"
 
     @staticmethod
     def _is_missing_backend_error(exc: Exception) -> bool:

@@ -16,6 +16,7 @@ from ..types import Engine, EngineResult, Frame
 from ..utils import env_bool, env_float, env_int, env_label_float_map, env_label_set, now_ms, safe_float01
 
 _FORBIDDEN_SYMBOLS_YOLO_CACHE: Dict[str, Any] = {}
+_FORBIDDEN_SYMBOLS_YOLO_INFERENCE_LOCKS: Dict[str, threading.RLock] = {}
 _FORBIDDEN_SYMBOLS_YOLO_CACHE_LOCK = threading.RLock()
 
 
@@ -99,7 +100,17 @@ def _load_model(model_path: str | None = None) -> Any:
         YOLO = getattr(importlib.import_module("ultralytics"), "YOLO")  # heavy optional import; local inference only
 
         _FORBIDDEN_SYMBOLS_YOLO_CACHE[key] = YOLO(str(resolved))
+        _FORBIDDEN_SYMBOLS_YOLO_INFERENCE_LOCKS.setdefault(key, threading.RLock())
         return _FORBIDDEN_SYMBOLS_YOLO_CACHE[key]
+
+
+def _inference_lock(model_key: str) -> threading.RLock:
+    with _FORBIDDEN_SYMBOLS_YOLO_CACHE_LOCK:
+        lock = _FORBIDDEN_SYMBOLS_YOLO_INFERENCE_LOCKS.get(model_key)
+        if lock is None:
+            lock = threading.RLock()
+            _FORBIDDEN_SYMBOLS_YOLO_INFERENCE_LOCKS[model_key] = lock
+        return lock
 
 
 def _tolist(value: Any) -> list[Any]:
@@ -142,6 +153,7 @@ def _predict(
     max_det: int,
     device: str | None,
     batch: int | None = None,
+    lock: threading.RLock | None = None,
 ) -> Any:
     kwargs: Dict[str, Any] = {
         "conf": conf,
@@ -170,12 +182,18 @@ def _predict(
     last_type_error: TypeError | None = None
     for variant in variants:
         try:
-            return model.predict(image, **variant)
+            if lock is None:
+                return model.predict(image, **variant)
+            with lock:
+                return model.predict(image, **variant)
         except TypeError as exc:
             last_type_error = exc
     if last_type_error is not None:
         raise last_type_error
-    return model.predict(image, **kwargs)
+    if lock is None:
+        return model.predict(image, **kwargs)
+    with lock:
+        return model.predict(image, **kwargs)
 
 
 def _results_list(results: Any) -> list[Any]:
@@ -270,6 +288,7 @@ class YOLOForbiddenSymbolsEngine(Engine):
                 },
                 took_ms=now_ms() - start,
             )
+        predict_lock = _inference_lock(str(model_path))
 
         device_raw = (os.getenv("FORBIDDEN_SYMBOLS_YOLO_DEVICE", "auto") or "auto").strip()
         device = None if device_raw.lower() in ("", "auto") else device_raw
@@ -346,13 +365,14 @@ class YOLOForbiddenSymbolsEngine(Engine):
                         max_det=max_det,
                         device=device,
                         batch=len(images),
+                        lock=predict_lock,
                     )
                 )
             except TypeError:
                 results = []
                 for fr, image in zip(selected_frames, images):
                     frame_results = _results_list(
-                        _predict(model, image, conf=conf, iou=iou, imgsz=imgsz, max_det=max_det, device=device)
+                        _predict(model, image, conf=conf, iou=iou, imgsz=imgsz, max_det=max_det, device=device, lock=predict_lock)
                     )
                     result_count += len(frame_results)
                     processed_frame_indices.append(int(fr.idx))
@@ -368,7 +388,7 @@ class YOLOForbiddenSymbolsEngine(Engine):
             for fr in selected_frames:
                 image = fr.pil.convert("RGB")
                 frame_results = _results_list(
-                    _predict(model, image, conf=conf, iou=iou, imgsz=imgsz, max_det=max_det, device=device)
+                    _predict(model, image, conf=conf, iou=iou, imgsz=imgsz, max_det=max_det, device=device, lock=predict_lock)
                 )
                 result_count += len(frame_results)
                 processed_frame_indices.append(int(fr.idx))

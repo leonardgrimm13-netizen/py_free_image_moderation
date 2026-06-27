@@ -12,9 +12,7 @@ from ..utils import now_ms
 
 class SightengineEngine(Engine):
     name = "Sightengine"
-    _SESSION_LOCK = threading.RLock()
-    _SESSION: Any = None
-    _SESSION_MODULE_ID: int | None = None
+    _SESSION_LOCAL = threading.local()
 
     def __init__(self, models: Optional[str] = None) -> None:
         super().__init__()
@@ -71,13 +69,16 @@ class SightengineEngine(Engine):
         import requests  # type: ignore
 
         module_id = id(requests)
-        with cls._SESSION_LOCK:
-            if cls._SESSION is not None and cls._SESSION_MODULE_ID == module_id:
-                return cls._SESSION
-            session_factory = getattr(requests, "Session", None)
-            cls._SESSION = session_factory() if callable(session_factory) else requests
-            cls._SESSION_MODULE_ID = module_id
-            return cls._SESSION
+        session = getattr(cls._SESSION_LOCAL, "session", None)
+        session_module_id = getattr(cls._SESSION_LOCAL, "module_id", None)
+        if session is not None and session_module_id == module_id:
+            return session
+
+        session_factory = getattr(requests, "Session", None)
+        session = session_factory() if callable(session_factory) else requests
+        cls._SESSION_LOCAL.session = session
+        cls._SESSION_LOCAL.module_id = module_id
+        return session
 
     def available(self) -> Tuple[bool, str]:
         # Ensure attributes exist + pick up any late env changes

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import sys
+import threading
 import types
+from concurrent.futures import ThreadPoolExecutor
 
 from PIL import Image
 
@@ -65,3 +67,38 @@ def test_sightengine_request_exception_returns_error(monkeypatch) -> None:
 
     assert result.status == EngineStatus.ERROR
     assert "request failed: TimeoutError: timed out" == result.error
+
+
+def test_sightengine_uses_thread_local_sessions(monkeypatch) -> None:
+    monkeypatch.setenv("SIGHTENGINE_USER", "user")
+    monkeypatch.setenv("SIGHTENGINE_SECRET", "secret")
+    monkeypatch.setattr(SightengineEngine, "_SESSION_LOCAL", threading.local())
+    created = []
+    created_lock = threading.Lock()
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.posts = 0
+            with created_lock:
+                created.append(self)
+
+        def post(self, *args, **kwargs):
+            self.posts += 1
+            return FakeResponse(200, data={"status": "success"})
+
+    fake_requests = types.SimpleNamespace(Session=FakeSession)
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+    start_barrier = threading.Barrier(2)
+
+    def run_twice():
+        start_barrier.wait(timeout=2)
+        first = SightengineEngine().run("dummy.png", _frame())
+        second = SightengineEngine().run("dummy.png", _frame())
+        return first.status, second.status
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        statuses = [future.result(timeout=3) for future in [executor.submit(run_twice), executor.submit(run_twice)]]
+
+    assert statuses == [(EngineStatus.OK, EngineStatus.OK), (EngineStatus.OK, EngineStatus.OK)]
+    assert len(created) == 2
+    assert sorted(session.posts for session in created) == [2, 2]

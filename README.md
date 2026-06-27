@@ -295,7 +295,7 @@ YOLO_DEVICE=
 YOLO_BATCH_ENABLE=1
 
 # OpenNSFW2 speed/stability
-OPENNSFW2_IN_PROCESS=1
+OPENNSFW2_IN_PROCESS=0
 
 # Local YOLO forbidden/harmful-symbol model
 FORBIDDEN_SYMBOLS_YOLO_ENABLE=1
@@ -325,7 +325,7 @@ Useful toggles:
 - `MODIMG_LOG_LEVEL=DEBUG|INFO|WARNING|ERROR` for centralized logging
 - `MODIMG_PARALLEL_ENGINES=1` to run independent engines concurrently (optional/experimental; disabled by default)
 - `MODIMG_FILE_WORKERS=2` or `--file-workers 2` processes multiple input files concurrently; default is `1`.
-- `OPENNSFW2_IN_PROCESS=1` is the faster default. Set `OPENNSFW2_IN_PROCESS=0` for the isolated subprocess path, or `auto` to try in-process with one subprocess fallback on normal errors.
+- `OPENNSFW2_IN_PROCESS=0` is the robust default and runs prediction in an isolated subprocess. Set `OPENNSFW2_IN_PROCESS=1` only for faster in-process prediction; native TensorFlow crashes can terminate the whole CLI process. `auto` tries in-process first and falls back once on normal Python errors.
 - `NO_CHECKS_POLICY=review` controls the fallback when no engine ran: `ok` = allow, `review` = safer default, `block` = strictest mode
 - `YOLO_WEAPON_MODEL` or `YOLO_WORLD_MODEL` points to custom YOLO weapon weights; without weights the weapon engine is skipped, not failed.
 
@@ -387,7 +387,7 @@ Speed tradeoffs:
 - `pip install -r requirements.txt` installs nothing or behaves oddly: check that every dependency is on its own line. A damaged requirements file with all dependencies on one line or with dependency lines accidentally commented out is invalid.
 - Unsupported Python version: use Python 3.11 or 3.12. Python 3.13+ may work for some packages, but this project does not promise it and the ML stack may reject it.
 - OpenNSFW2 backend missing: install `requirements_local.txt` or `.[local]`. The project intentionally uses `opennsfw2[tf-keras]`; plain `opennsfw2` can import without having a usable inference backend.
-- OpenNSFW2 native crash: the faster default is in-process prediction. Set `OPENNSFW2_IN_PROCESS=0` to use the isolated Python subprocess so TensorFlow/native crashes become a controlled engine error instead of killing the CLI. `OPENNSFW2_IN_PROCESS=auto` tries in-process first and falls back once on normal Python exceptions.
+- OpenNSFW2 native crash: the default is the isolated Python subprocess (`OPENNSFW2_IN_PROCESS=0`) so TensorFlow/native crashes become a controlled engine error instead of killing the CLI. `OPENNSFW2_IN_PROCESS=1` is faster but less robust because native TensorFlow crashes can terminate the whole process. `OPENNSFW2_IN_PROCESS=auto` tries in-process first and falls back once on normal Python exceptions, but cannot recover from native process crashes.
 - TensorFlow/Keras compatibility: keep the local install in a fresh Python 3.11/3.12 venv. If you previously installed Keras/TensorFlow packages manually, recreate the venv and reinstall `requirements_local.txt`.
 - Tesseract missing: install the system binary and set `TESSERACT_CMD` if it is not on `PATH`. The OCR engine returns `skipped`/controlled `error` instead of crashing.
 - CUDA/GPU not available: the CLI defaults `CUDA_VISIBLE_DEVICES=-1` for process safety. For CPU-only runs you can also set `YOLO_DEVICE=cpu` and `FORBIDDEN_SYMBOLS_YOLO_DEVICE=cpu`; for GPU runs, set `CUDA_VISIBLE_DEVICES` explicitly before starting the CLI.

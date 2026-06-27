@@ -11,6 +11,7 @@ from ..types import Engine, EngineResult, Frame
 from ..utils import env_bool, env_float, env_int, now_ms, safe_float01
 
 _YOLO_CACHE: Dict[Tuple[str, str], Any] = {}
+_YOLO_INFERENCE_LOCKS: Dict[Tuple[str, str], threading.RLock] = {}
 _YOLO_CACHE_LOCK = threading.RLock()
 _PLACEHOLDER_NAMES = {"yolo-world", "yolo_world"}
 
@@ -91,9 +92,23 @@ def _resolve_model_reference() -> Tuple[str, bool, str | None]:
     return str(default_model.resolve()), False, None
 
 
-def _load_model(model_ref: str) -> Any:
+def _model_cache_key(model_ref: str) -> Tuple[str, str]:
     backend = os.getenv("YOLO_BACKEND", "ultralytics").strip().lower()
-    key = (backend, model_ref)
+    return (backend, model_ref)
+
+
+def _inference_lock(model_ref: str) -> threading.RLock:
+    key = _model_cache_key(model_ref)
+    with _YOLO_CACHE_LOCK:
+        lock = _YOLO_INFERENCE_LOCKS.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            _YOLO_INFERENCE_LOCKS[key] = lock
+        return lock
+
+
+def _load_model(model_ref: str) -> Any:
+    key = _model_cache_key(model_ref)
     with _YOLO_CACHE_LOCK:
         if key in _YOLO_CACHE:
             return _YOLO_CACHE[key]
@@ -101,6 +116,7 @@ def _load_model(model_ref: str) -> Any:
         from ultralytics import YOLO  # heavy import
 
         _YOLO_CACHE[key] = YOLO(model_ref)
+        _YOLO_INFERENCE_LOCKS.setdefault(key, threading.RLock())
         return _YOLO_CACHE[key]
 
 
@@ -114,6 +130,7 @@ def _predict(
     max_det: int,
     device: str | None,
     batch: int | None = None,
+    lock: threading.RLock | None = None,
 ) -> Any:
     kwargs: Dict[str, Any] = {
         "conf": conf,
@@ -142,12 +159,18 @@ def _predict(
     last_type_error: TypeError | None = None
     for variant in variants:
         try:
-            return model.predict(image_or_images, **variant)
+            if lock is None:
+                return model.predict(image_or_images, **variant)
+            with lock:
+                return model.predict(image_or_images, **variant)
         except TypeError as exc:
             last_type_error = exc
     if last_type_error is not None:
         raise last_type_error
-    return model.predict(image_or_images, **kwargs)
+    if lock is None:
+        return model.predict(image_or_images, **kwargs)
+    with lock:
+        return model.predict(image_or_images, **kwargs)
 
 
 def _results_list(results: Any) -> list[Any]:
@@ -186,6 +209,7 @@ class YOLOWorldWeaponsEngine(Engine):
             )
 
         mdl = _load_model(model_ref)
+        predict_lock = _inference_lock(model_ref)
         conf = env_float("YOLO_CONF", 0.25, min_value=0.0, max_value=1.0)
         iou = env_float("YOLO_IOU", 0.45, min_value=0.0, max_value=1.0)
         imgsz = env_int("YOLO_IMGSZ", 640)
@@ -248,6 +272,7 @@ class YOLOWorldWeaponsEngine(Engine):
                         max_det=max_det,
                         device=device,
                         batch=len(images),
+                        lock=predict_lock,
                     )
                 )
             except TypeError:
@@ -255,7 +280,7 @@ class YOLOWorldWeaponsEngine(Engine):
                 for image in images:
                     batch_results.extend(
                         _results_list(
-                            _predict(mdl, image, conf=conf, iou=iou, imgsz=imgsz, max_det=max_det, device=device)
+                            _predict(mdl, image, conf=conf, iou=iou, imgsz=imgsz, max_det=max_det, device=device, lock=predict_lock)
                         )
                     )
             for result in batch_results[: len(use)]:
@@ -263,7 +288,9 @@ class YOLOWorldWeaponsEngine(Engine):
         else:
             for fr in use:
                 image = fr.pil.convert("RGB")
-                for result in _results_list(_predict(mdl, image, conf=conf, iou=iou, imgsz=imgsz, max_det=max_det, device=device)):
+                for result in _results_list(
+                    _predict(mdl, image, conf=conf, iou=iou, imgsz=imgsz, max_det=max_det, device=device, lock=predict_lock)
+                ):
                     _consume_result(result)
 
         firearm_any = max(firearm, firearm_real, firearm_toy)

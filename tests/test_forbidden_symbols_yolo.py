@@ -2,11 +2,19 @@ from __future__ import annotations
 
 import json
 import sys
+import threading
+import time
 import types
+from concurrent.futures import ThreadPoolExecutor
+
 import pytest
 from PIL import Image
 
-from modimg.engines.forbidden_symbols_yolo import YOLOForbiddenSymbolsEngine, _FORBIDDEN_SYMBOLS_YOLO_CACHE
+from modimg.engines.forbidden_symbols_yolo import (
+    YOLOForbiddenSymbolsEngine,
+    _FORBIDDEN_SYMBOLS_YOLO_CACHE,
+    _FORBIDDEN_SYMBOLS_YOLO_INFERENCE_LOCKS,
+)
 from modimg.enums import EngineStatus, VerdictLabel
 from modimg.pipeline import build_local_engines, build_pre_engines
 from modimg.types import EngineResult, Frame
@@ -24,6 +32,7 @@ def _frames(n: int) -> list[Frame]:
 @pytest.fixture(autouse=True)
 def _clean_cache() -> None:
     _FORBIDDEN_SYMBOLS_YOLO_CACHE.clear()
+    _FORBIDDEN_SYMBOLS_YOLO_INFERENCE_LOCKS.clear()
 
 
 def test_forbidden_symbols_engine_disabled(monkeypatch) -> None:
@@ -163,6 +172,33 @@ class FakeSequentialStopYOLO:
         return [FakeBatchResult(0, 0.95)]
 
 
+class FakeConcurrentForbiddenYOLO:
+    names = {0: "test_symbol", 1: "second_symbol"}
+    instances: list["FakeConcurrentForbiddenYOLO"] = []
+
+    def __init__(self, model_path: str) -> None:
+        self.model_path = model_path
+        self.calls: list[tuple[bool, dict]] = []
+        self.state_lock = threading.Lock()
+        self.active = 0
+        self.max_active = 0
+        FakeConcurrentForbiddenYOLO.instances.append(self)
+
+    def predict(self, image, **kwargs):
+        with self.state_lock:
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+        try:
+            time.sleep(0.05)
+            self.calls.append((isinstance(image, list), dict(kwargs)))
+            if isinstance(image, list):
+                return [FakeBatchResult(0, 0.70), FakeBatchResult(1, 0.80)]
+            return [FakeBatchResult(0, 0.70)]
+        finally:
+            with self.state_lock:
+                self.active -= 1
+
+
 def test_forbidden_symbols_engine_empty_detections(monkeypatch, tmp_path) -> None:
     model = tmp_path / "model.pt"
     model.write_bytes(b"not a model pointer" * 200)
@@ -245,6 +281,32 @@ def test_forbidden_symbols_batch_handles_fewer_results_than_frames(monkeypatch, 
     assert result.status == EngineStatus.OK
     assert result.details["result_count"] == 1
     assert [d["frame_idx"] for d in result.details["detections"]] == [0]
+
+
+def test_forbidden_symbols_serializes_predict_on_cached_model(monkeypatch, tmp_path) -> None:
+    model = tmp_path / "model.pt"
+    model.write_bytes(b"not a model pointer" * 200)
+    FakeConcurrentForbiddenYOLO.instances = []
+    monkeypatch.setitem(sys.modules, "ultralytics", types.SimpleNamespace(YOLO=FakeConcurrentForbiddenYOLO))
+    monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_ENABLE", "1")
+    monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_MODEL", str(model))
+    monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_BATCH_ENABLE", "1")
+    monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_MAX_FRAMES", "2")
+    start_barrier = threading.Barrier(2)
+
+    def run_once():
+        start_barrier.wait(timeout=2)
+        return YOLOForbiddenSymbolsEngine().execute("dummy.png", _frames(2))
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = [future.result(timeout=3) for future in [executor.submit(run_once), executor.submit(run_once)]]
+
+    assert [result.status for result in results] == [EngineStatus.OK, EngineStatus.OK]
+    assert len(FakeConcurrentForbiddenYOLO.instances) == 1
+    fake_model = FakeConcurrentForbiddenYOLO.instances[0]
+    assert fake_model.max_active == 1
+    assert len(fake_model.calls) == 2
+    assert all(is_batch is True for is_batch, _ in fake_model.calls)
 
 
 def test_forbidden_symbols_sequential_stop_after_block(monkeypatch, tmp_path) -> None:

@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+
 from PIL import Image
 
+from modimg.engines import yolo_weapons
 from modimg.engines.yolo_weapons import YOLOWorldWeaponsEngine
 from modimg.enums import EngineStatus
 from modimg.types import Frame
@@ -52,3 +57,48 @@ def test_yolo_weapons_batch_parses_multiple_frame_results(monkeypatch) -> None:
     assert len(fake_model.calls) == 1
     assert fake_model.calls[0][0] is True
     assert fake_model.calls[0][1]["batch"] == 2
+
+
+def test_yolo_weapons_serializes_predict_on_cached_model(monkeypatch) -> None:
+    class ConcurrentFakeWeaponModel(FakeWeaponModel):
+        def __init__(self) -> None:
+            super().__init__()
+            self.state_lock = threading.Lock()
+            self.active = 0
+            self.max_active = 0
+
+        def predict(self, image, **kwargs):
+            with self.state_lock:
+                self.active += 1
+                self.max_active = max(self.max_active, self.active)
+            try:
+                time.sleep(0.05)
+                return super().predict(image, **kwargs)
+            finally:
+                with self.state_lock:
+                    self.active -= 1
+
+    fake_model = ConcurrentFakeWeaponModel()
+    yolo_weapons._YOLO_INFERENCE_LOCKS.clear()
+    monkeypatch.setenv("YOLO_BATCH_ENABLE", "1")
+    monkeypatch.setenv("YOLO_MAX_FRAMES", "2")
+    monkeypatch.setattr("modimg.engines.yolo_weapons._resolve_model_reference", lambda: ("fake.pt", True, None))
+    monkeypatch.setattr("modimg.engines.yolo_weapons._load_model", lambda model_ref: fake_model)
+
+    frames = [
+        Frame(idx=0, pil=Image.new("RGB", (16, 16), color=(1, 2, 3))),
+        Frame(idx=1, pil=Image.new("RGB", (16, 16), color=(4, 5, 6))),
+    ]
+    start_barrier = threading.Barrier(2)
+
+    def run_once():
+        start_barrier.wait(timeout=2)
+        return YOLOWorldWeaponsEngine().run("dummy.png", frames)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = [future.result(timeout=3) for future in [executor.submit(run_once), executor.submit(run_once)]]
+
+    assert [result.status for result in results] == [EngineStatus.OK, EngineStatus.OK]
+    assert fake_model.max_active == 1
+    assert len(fake_model.calls) == 2
+    assert all(is_batch is True for is_batch, _ in fake_model.calls)
