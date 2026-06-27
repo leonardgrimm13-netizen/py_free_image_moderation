@@ -181,6 +181,11 @@ python moderate_image.py "https://example.com/image.jpg"
 python moderate_image.py ./images --recursive
 ```
 
+### Check a directory with file parallelism
+```bash
+python moderate_image.py ./images --recursive --file-workers 2
+```
+
 ### Without external APIs
 ```bash
 python moderate_image.py ./images --recursive --no-apis
@@ -265,6 +270,10 @@ SIGHTENGINE_SECRET=...
 SAMPLE_FRAMES=12
 SHORT_CIRCUIT_PHASH=1
 ENGINE_ERROR_POLICY=review
+API_POLICY=always
+MODIMG_PARALLEL_ENGINES=0
+MODIMG_PARALLEL_WORKERS=4
+MODIMG_FILE_WORKERS=1
 
 # OCR
 OCR_ENABLE=1
@@ -283,6 +292,10 @@ YOLO_CONF=0.25
 YOLO_IMGSZ=640
 YOLO_MAX_FRAMES=2
 YOLO_DEVICE=
+YOLO_BATCH_ENABLE=1
+
+# OpenNSFW2 speed/stability
+OPENNSFW2_IN_PROCESS=0
 
 # Local YOLO forbidden/harmful-symbol model
 FORBIDDEN_SYMBOLS_YOLO_ENABLE=1
@@ -293,6 +306,8 @@ FORBIDDEN_SYMBOLS_YOLO_IMGSZ=960
 FORBIDDEN_SYMBOLS_YOLO_MAX_DET=20
 FORBIDDEN_SYMBOLS_YOLO_MAX_FRAMES=2
 FORBIDDEN_SYMBOLS_YOLO_DEVICE=auto
+FORBIDDEN_SYMBOLS_YOLO_BATCH_ENABLE=1
+FORBIDDEN_SYMBOLS_YOLO_STOP_AFTER_BLOCK=1
 FORBIDDEN_SYMBOLS_YOLO_REVIEW_CONF=0.30
 FORBIDDEN_SYMBOLS_YOLO_BLOCK_CONF=0.90
 FORBIDDEN_SYMBOLS_YOLO_LABEL_REVIEW_CONF=
@@ -302,16 +317,39 @@ FORBIDDEN_SYMBOLS_YOLO_IGNORE_LABELS=
 ```
 
 Useful toggles:
-- Main performance knobs: `SAMPLE_FRAMES`, `API_POLICY`, `YOLO_IMGSZ`, `YOLO_MAX_FRAMES`, `YOLO_MAX_DET`, `FORBIDDEN_SYMBOLS_YOLO_IMGSZ`, `FORBIDDEN_SYMBOLS_YOLO_MAX_FRAMES`, `OCR_MAX_FRAMES`, `PHASH_ALLOW_MAX_DISTANCE`, `PHASH_BLOCK_MAX_DISTANCE`
+- Main performance knobs: `SAMPLE_FRAMES`, `API_POLICY`, `MODIMG_FILE_WORKERS`, `MODIMG_PARALLEL_ENGINES`, `MODIMG_PARALLEL_WORKERS`, `OPENNSFW2_IN_PROCESS`, `YOLO_BATCH_ENABLE`, `YOLO_IMGSZ`, `YOLO_MAX_FRAMES`, `YOLO_MAX_DET`, `FORBIDDEN_SYMBOLS_YOLO_BATCH_ENABLE`, `FORBIDDEN_SYMBOLS_YOLO_IMGSZ`, `FORBIDDEN_SYMBOLS_YOLO_MAX_FRAMES`, `OCR_MAX_FRAMES`, `PHASH_ALLOW_MAX_DISTANCE`, `PHASH_BLOCK_MAX_DISTANCE`
 - `API_POLICY=always|on_review|never` controls when API engines run
 - `OPENAI_DISABLE=1` / omit `SIGHTENGINE_*` if you don’t use API engines
 - `PHASH_ALLOW_DISABLE=1` or `PHASH_BLOCK_DISABLE=1` to disable them selectively
 - `SCORE_VERBOSE=1` for more verbose engine scores
 - `MODIMG_LOG_LEVEL=DEBUG|INFO|WARNING|ERROR` for centralized logging
 - `MODIMG_PARALLEL_ENGINES=1` to run independent engines concurrently (optional/experimental; disabled by default)
+- `MODIMG_FILE_WORKERS=2` or `--file-workers 2` processes multiple input files concurrently; default is `1`.
+- `OPENNSFW2_IN_PROCESS=0` is the robust default and runs prediction in an isolated subprocess. Set `OPENNSFW2_IN_PROCESS=1` only for faster in-process prediction; native TensorFlow crashes can terminate the whole CLI process. `auto` tries in-process first and falls back once on normal Python errors.
 - `NO_CHECKS_POLICY=review` controls the fallback when no engine ran: `ok` = allow, `review` = safer default, `block` = strictest mode
 - `YOLO_WEAPON_MODEL` or `YOLO_WORLD_MODEL` points to custom YOLO weapon weights; without weights the weapon engine is skipped, not failed.
 
+
+### Fast preset
+Recommended first performance test: `MODIMG_FILE_WORKERS=2` and `MODIMG_PARALLEL_WORKERS=4`.
+
+```env
+MODIMG_PARALLEL_ENGINES=1
+MODIMG_PARALLEL_WORKERS=4
+MODIMG_FILE_WORKERS=2
+OPENNSFW2_IN_PROCESS=1
+YOLO_BATCH_ENABLE=1
+FORBIDDEN_SYMBOLS_YOLO_BATCH_ENABLE=1
+YOLO_MAX_FRAMES=1
+FORBIDDEN_SYMBOLS_YOLO_MAX_FRAMES=1
+SAMPLE_FRAMES=4
+API_POLICY=on_review
+```
+
+Speed tradeoffs:
+- Checking fewer frames can reduce accuracy on GIFs/animated images if policy-relevant content appears only in skipped frames.
+- Too many file workers can overload GPU/VRAM, especially when both YOLO engines run on GPU.
+- Start with file workers `2` and engine workers `4`, then benchmark before increasing either value.
 
 ### Local YOLO forbidden-symbol configuration
 - `FORBIDDEN_SYMBOLS_YOLO_ENABLE=1` enables the bundled local model by default.
@@ -321,7 +359,7 @@ Useful toggles:
 - `FORBIDDEN_SYMBOLS_YOLO_LABEL_REVIEW_CONF` and `FORBIDDEN_SYMBOLS_YOLO_LABEL_BLOCK_CONF` can override thresholds per label, e.g. `swastika:0.50,isis:0.75`.
 - Recommended defaults: `conf=0.20`, `review=0.30`, `block=0.90`, `imgsz=960`.
 - `FORBIDDEN_SYMBOLS_YOLO_MAX_FRAMES<=0` disables frame inference for this engine and returns an OK result with zero detections.
-- For faster CPU-only scans, try `SAMPLE_FRAMES=3`, `OCR_MAX_FRAMES=1`, `YOLO_IMGSZ=416`, `YOLO_MAX_FRAMES=1`, `YOLO_DEVICE=cpu`, `FORBIDDEN_SYMBOLS_YOLO_IMGSZ=640`, `FORBIDDEN_SYMBOLS_YOLO_MAX_FRAMES=1`, and `FORBIDDEN_SYMBOLS_YOLO_DEVICE=cpu`.
+- For faster CPU-only scans, try the fast preset plus `OCR_MAX_FRAMES=1`, `YOLO_IMGSZ=416`, `YOLO_DEVICE=cpu`, `FORBIDDEN_SYMBOLS_YOLO_IMGSZ=640`, and `FORBIDDEN_SYMBOLS_YOLO_DEVICE=cpu`.
 - Unreliable labels can be ignored at runtime, e.g. `FORBIDDEN_SYMBOLS_YOLO_IGNORE_LABELS=communism,antifa`.
 
 ---
@@ -349,7 +387,7 @@ Useful toggles:
 - `pip install -r requirements.txt` installs nothing or behaves oddly: check that every dependency is on its own line. A damaged requirements file with all dependencies on one line or with dependency lines accidentally commented out is invalid.
 - Unsupported Python version: use Python 3.11 or 3.12. Python 3.13+ may work for some packages, but this project does not promise it and the ML stack may reject it.
 - OpenNSFW2 backend missing: install `requirements_local.txt` or `.[local]`. The project intentionally uses `opennsfw2[tf-keras]`; plain `opennsfw2` can import without having a usable inference backend.
-- OpenNSFW2 native crash: the engine runs prediction in an isolated Python subprocess by default, so TensorFlow/native crashes become a controlled engine error instead of killing the CLI. `OPENNSFW2_IN_PROCESS=1` is available only if you explicitly want the faster, less isolated path.
+- OpenNSFW2 native crash: the default is the isolated Python subprocess (`OPENNSFW2_IN_PROCESS=0`) so TensorFlow/native crashes become a controlled engine error instead of killing the CLI. `OPENNSFW2_IN_PROCESS=1` is faster but less robust because native TensorFlow crashes can terminate the whole process. `OPENNSFW2_IN_PROCESS=auto` tries in-process first and falls back once on normal Python exceptions, but cannot recover from native process crashes.
 - TensorFlow/Keras compatibility: keep the local install in a fresh Python 3.11/3.12 venv. If you previously installed Keras/TensorFlow packages manually, recreate the venv and reinstall `requirements_local.txt`.
 - Tesseract missing: install the system binary and set `TESSERACT_CMD` if it is not on `PATH`. The OCR engine returns `skipped`/controlled `error` instead of crashing.
 - CUDA/GPU not available: the CLI defaults `CUDA_VISIBLE_DEVICES=-1` for process safety. For CPU-only runs you can also set `YOLO_DEVICE=cpu` and `FORBIDDEN_SYMBOLS_YOLO_DEVICE=cpu`; for GPU runs, set `CUDA_VISIBLE_DEVICES` explicitly before starting the CLI.

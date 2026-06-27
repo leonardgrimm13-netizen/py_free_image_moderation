@@ -15,14 +15,15 @@ from modimg.types import Frame, Verdict
 
 
 class SlowEngine(Engine):
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, delay: float = 0.05) -> None:
         super().__init__()
         self.name = name
+        self.delay = delay
 
     def run(self, path, frames, max_api_frames=3):
         import time
 
-        time.sleep(0.05)
+        time.sleep(self.delay)
         return EngineResult(name=self.name, status="ok", scores={"x": 1.0})
 
 
@@ -41,6 +42,17 @@ def test_run_engines_parallel_preserves_order(monkeypatch) -> None:
     results = run_engines("dummy", [], engines)
 
     assert [r.name for r in results] == ["a", "b"]
+
+
+def test_run_engines_parallel_preserves_order_with_out_of_order_completion(monkeypatch) -> None:
+    monkeypatch.setenv("MODIMG_PARALLEL_ENGINES", "1")
+    monkeypatch.setenv("MODIMG_PARALLEL_WORKERS", "2")
+    get_config(reload=True)
+
+    engines = [SlowEngine("slow", 0.05), SlowEngine("fast", 0.0)]
+    results = run_engines("dummy", [], engines)
+
+    assert [r.name for r in results] == ["slow", "fast"]
 
 
 def test_maybe_auto_learn_processes_all_hashes(monkeypatch) -> None:
@@ -85,9 +97,21 @@ def test_maybe_auto_learn_master_switch_off_ignores_legacy_flags(monkeypatch) ->
 
 
 def test_cli_json_serializes_enum_values(tmp_path) -> None:
+    import os
+
     img_path = tmp_path / "sample.png"
     out_path = tmp_path / "report.json"
     Image.new("RGB", (16, 16), color=(10, 20, 30)).save(img_path)
+    env = os.environ.copy()
+    env.update(
+        {
+            "OPENNSFW2_DISABLE": "1",
+            "NUDENET_DISABLE": "1",
+            "OCR_ENABLE": "0",
+            "FORBIDDEN_SYMBOLS_YOLO_ENABLE": "0",
+            "YOLO_WEAPON_MODEL": str(tmp_path / "missing-weapons.pt"),
+        }
+    )
 
     proc = subprocess.run(
         [sys.executable, "-m", "modimg.cli", str(img_path), "--no-apis", "--json", str(out_path)],
@@ -96,6 +120,7 @@ def test_cli_json_serializes_enum_values(tmp_path) -> None:
         text=True,
         encoding="utf-8",
         errors="replace",
+        env=env,
     )
     assert proc.returncode in (0, 2)
     data = json.loads(out_path.read_text(encoding="utf-8"))

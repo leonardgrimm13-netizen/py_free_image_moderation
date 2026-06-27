@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 from typing import Any, List, Tuple, Optional
 from PIL import Image
 
@@ -21,6 +22,21 @@ class OpenNSFW2Engine(Engine):
     name = "OpenNSFW2"
 
     _BACKEND = None  # (name, module)
+    _BACKEND_LOCK = threading.RLock()
+
+    @staticmethod
+    def _in_process_mode() -> str:
+        raw = os.getenv("OPENNSFW2_IN_PROCESS")
+        if raw is None or str(raw).strip() == "":
+            return "0"
+        value = str(raw).strip().lower()
+        if value == "auto":
+            return "auto"
+        if value in ("1", "true", "yes", "on"):
+            return "1"
+        if value in ("0", "false", "no", "off"):
+            return "0"
+        return "0"
 
     @staticmethod
     def _is_missing_backend_error(exc: Exception) -> bool:
@@ -36,19 +52,20 @@ class OpenNSFW2Engine(Engine):
         return isinstance(exc, (ImportError, ModuleNotFoundError)) or any(marker in msg for marker in backend_markers)
 
     def _import_backend(self):
-        if OpenNSFW2Engine._BACKEND is not None:
+        with OpenNSFW2Engine._BACKEND_LOCK:
+            if OpenNSFW2Engine._BACKEND is not None:
+                return OpenNSFW2Engine._BACKEND
+            # Preferred official package name on PyPI is `opennsfw2`.
+            try:
+                import opennsfw2 as n2  # type: ignore
+                OpenNSFW2Engine._BACKEND = ("opennsfw2", n2)
+                return OpenNSFW2Engine._BACKEND
+            except Exception:
+                pass
+            # Back-compat name some projects use:
+            import open_nsfw2 as n2  # type: ignore
+            OpenNSFW2Engine._BACKEND = ("open_nsfw2", n2)
             return OpenNSFW2Engine._BACKEND
-        # Preferred official package name on PyPI is `opennsfw2`.
-        try:
-            import opennsfw2 as n2  # type: ignore
-            OpenNSFW2Engine._BACKEND = ("opennsfw2", n2)
-            return OpenNSFW2Engine._BACKEND
-        except Exception:
-            pass
-        # Back-compat name some projects use:
-        import open_nsfw2 as n2  # type: ignore
-        OpenNSFW2Engine._BACKEND = ("open_nsfw2", n2)
-        return OpenNSFW2Engine._BACKEND
 
     def available(self) -> Tuple[bool, str]:
         if env_bool("OPENNSFW2_DISABLE", False):
@@ -228,6 +245,12 @@ except Exception as exc:
         start = now_ms()
         if not frames:
             return EngineResult(name=self.name, status=EngineStatus.SKIPPED, error="no frames", took_ms=now_ms() - start)
-        if env_bool("OPENNSFW2_IN_PROCESS", False):
+        mode = self._in_process_mode()
+        if mode == "1":
             return self._predict_in_process(path, frames, start)
+        if mode == "auto":
+            in_process_result = self._predict_in_process(path, frames, start)
+            if in_process_result.status == EngineStatus.ERROR:
+                return self._predict_in_subprocess(path, start)
+            return in_process_result
         return self._predict_in_subprocess(path, start)

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import sys
+import types
+
 from PIL import Image
 
 from modimg.enums import EngineStatus
@@ -15,6 +18,9 @@ def _reset_cache_state() -> None:
     OpenAIModerationEngine._CACHE_WRITES_SINCE_FLUSH = 0
     OpenAIModerationEngine._CACHE_DIR_ERROR = False
     OpenAIModerationEngine._CACHE_DIR_ERROR_REASON = None
+    OpenAIModerationEngine._CLIENT = None
+    OpenAIModerationEngine._CLIENT_TIMEOUT = None
+    OpenAIModerationEngine._CLIENT_API_KEY = None
 
 
 def test_openai_cache_save_is_reentrant_under_cache_lock(monkeypatch, tmp_path) -> None:
@@ -75,3 +81,31 @@ def test_openai_missing_api_key_is_skipped(monkeypatch) -> None:
 
     assert result.status == EngineStatus.SKIPPED
     assert result.error == "OPENAI_API_KEY not set"
+
+
+def test_openai_client_is_reused_until_timeout_or_key_changes(monkeypatch) -> None:
+    class FakeOpenAI:
+        instances: list["FakeOpenAI"] = []
+
+        def __init__(self, timeout):
+            self.timeout = timeout
+            FakeOpenAI.instances.append(self)
+
+    monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=FakeOpenAI))
+    monkeypatch.setenv("OPENAI_API_KEY", "key-1")
+    _reset_cache_state()
+
+    first = OpenAIModerationEngine._client_for_timeout(10.0)
+    second = OpenAIModerationEngine._client_for_timeout(10.0)
+
+    assert first is second
+    assert len(FakeOpenAI.instances) == 1
+
+    third = OpenAIModerationEngine._client_for_timeout(20.0)
+    assert third is not first
+    assert len(FakeOpenAI.instances) == 2
+
+    monkeypatch.setenv("OPENAI_API_KEY", "key-2")
+    fourth = OpenAIModerationEngine._client_for_timeout(20.0)
+    assert fourth is not third
+    assert len(FakeOpenAI.instances) == 3

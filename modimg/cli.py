@@ -3,13 +3,17 @@ from __future__ import annotations
 import argparse
 import os
 import time
+import traceback
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 from .config import get_config, load_dotenv_candidates
 from .benchmark import collect_benchmark_item, format_benchmark_summary, summarize_benchmark
+from .enums import EngineStatus, VerdictLabel
 from .logging_utils import get_logger
 from .pipeline import run_on_input
+from .types import EngineResult, Verdict
 from .utils import env_int, is_image_file, is_url, json_dumps_safe, json_safe
 
 LOGGER = get_logger("cli")
@@ -111,6 +115,73 @@ def _print_report(rep: Dict[str, Any]) -> None:
         LOGGER.info("   [%-7s] %-22s (%sms) %s", st, r.name, int(r.took_ms or 0), msg)
 
 
+def _serialize_report(rep: Dict[str, Any]) -> Dict[str, Any]:
+    return json_safe(
+        {
+            "name": rep["name"],
+            "path": rep["path"],
+            "verdict": {
+                **rep["verdict"].__dict__,
+                "label": _enum_value(rep["verdict"].label),
+            },
+            "results": [
+                {
+                    **r.__dict__,
+                    "status": _enum_value(r.status),
+                }
+                for r in rep["results"]
+            ],
+            "auto_learn": rep.get("auto_learn"),
+        }
+    )
+
+
+def _error_report(inp: str, exc: Exception) -> Dict[str, Any]:
+    details: Dict[str, Any] = {}
+    if get_config().debug:
+        details["trace"] = traceback.format_exc()[-2000:]
+    return {
+        "name": inp,
+        "path": inp,
+        "verdict": Verdict(
+            VerdictLabel.REVIEW,
+            0.0,
+            0.0,
+            0.0,
+            [f"processing_failure: {type(exc).__name__}: {exc}"],
+        ),
+        "results": [
+            EngineResult(
+                name="Processor",
+                status=EngineStatus.ERROR,
+                error=f"failed to process image: {type(exc).__name__}: {exc}",
+                details=details,
+            )
+        ],
+        "auto_learn": "",
+    }
+
+
+def _process_input(
+    idx: int,
+    inp: str,
+    *,
+    no_apis: bool,
+    sample_frames: int,
+    benchmark_enabled: bool,
+) -> Tuple[int, Dict[str, Any], Dict[str, Any] | None]:
+    file_start = time.perf_counter() if benchmark_enabled else 0.0
+    try:
+        rep = run_on_input(inp, no_apis=no_apis, sample_frames=sample_frames)
+    except Exception as exc:
+        rep = _error_report(inp, exc)
+    benchmark_item = None
+    if benchmark_enabled:
+        file_total_ms = int((time.perf_counter() - file_start) * 1000)
+        benchmark_item = collect_benchmark_item(rep, file_total_ms)
+    return idx, rep, benchmark_item
+
+
 def main(argv: List[str] | None = None) -> int:
     load_dotenv_candidates()
     cfg = get_config(reload=True)
@@ -122,8 +193,15 @@ def main(argv: List[str] | None = None) -> int:
     ap.add_argument("--json", dest="json_out", default="", help="Write report(s) to JSON file")
     ap.add_argument("--benchmark", action="store_true", help="Print runtime benchmark summary")
     ap.add_argument("--benchmark-json", default="", help="Write runtime benchmark summary to JSON file")
+    ap.add_argument(
+        "--file-workers",
+        type=int,
+        default=cfg.file_workers,
+        help="Number of input files to process concurrently (env: MODIMG_FILE_WORKERS; default: 1)",
+    )
     args = ap.parse_args(argv)
     benchmark_enabled = bool(args.benchmark or args.benchmark_json)
+    file_workers = max(1, int(args.file_workers or 1))
 
     if not args.input:
         ap.error("input is required (path/dir/url)")
@@ -139,38 +217,55 @@ def main(argv: List[str] | None = None) -> int:
     reports: List[Dict[str, Any]] = []
     benchmark_items: List[Dict[str, Any]] = []
     bench_start = time.perf_counter() if benchmark_enabled else None
-    for p in inputs:
-        if benchmark_enabled:
-            file_start = time.perf_counter()
-        rep = run_on_input(p, no_apis=args.no_apis, sample_frames=args.sample_frames)
-        if benchmark_enabled:
-            file_total_ms = int((time.perf_counter() - file_start) * 1000)
-            benchmark_items.append(collect_benchmark_item(rep, file_total_ms))
-        _print_report(rep)
-        reports.append(
-            json_safe(
-                {
-                    "name": rep["name"],
-                    "path": rep["path"],
-                    "verdict": {
-                        **rep["verdict"].__dict__,
-                        "label": _enum_value(rep["verdict"].label),
-                    },
-                    "results": [
-                        {
-                            **r.__dict__,
-                            "status": _enum_value(r.status),
-                        }
-                        for r in rep["results"]
-                    ],
-                    "auto_learn": rep.get("auto_learn"),
-                }
+    processing_wall_ms: int | None = None
+    if file_workers <= 1 or len(inputs) <= 1:
+        for idx, p in enumerate(inputs):
+            _, rep, benchmark_item = _process_input(
+                idx,
+                p,
+                no_apis=args.no_apis,
+                sample_frames=args.sample_frames,
+                benchmark_enabled=benchmark_enabled,
             )
-        )
+            if benchmark_item is not None:
+                benchmark_items.append(benchmark_item)
+            _print_report(rep)
+            reports.append(_serialize_report(rep))
+    else:
+        completed_map: Dict[int, Tuple[int, Dict[str, Any], Dict[str, Any] | None]] = {}
+        with ThreadPoolExecutor(max_workers=min(file_workers, len(inputs))) as executor:
+            futures = {
+                executor.submit(
+                    _process_input,
+                    idx,
+                    p,
+                    no_apis=args.no_apis,
+                    sample_frames=args.sample_frames,
+                    benchmark_enabled=benchmark_enabled,
+                ): idx
+                for idx, p in enumerate(inputs)
+            }
+            for fut in as_completed(futures):
+                idx = futures[fut]
+                try:
+                    completed_map[idx] = fut.result()
+                except Exception as exc:
+                    rep = _error_report(inputs[idx], exc)
+                    benchmark_item = collect_benchmark_item(rep, 0) if benchmark_enabled else None
+                    completed_map[idx] = (idx, rep, benchmark_item)
+        completed = [completed_map[idx] for idx in range(len(inputs))]
+
+        for _, rep, benchmark_item in completed:
+            if benchmark_item is not None:
+                benchmark_items.append(benchmark_item)
+            _print_report(rep)
+            reports.append(_serialize_report(rep))
+
+    if benchmark_enabled:
+        processing_wall_ms = int((time.perf_counter() - bench_start) * 1000) if bench_start is not None else None
 
     benchmark_summary = None
     if benchmark_enabled:
-        processing_wall_ms = int((time.perf_counter() - bench_start) * 1000) if bench_start is not None else None
         benchmark_summary = summarize_benchmark(benchmark_items, total_wall_ms=processing_wall_ms)
 
     if args.json_out:

@@ -90,6 +90,7 @@ class Config:
     final_block_threshold: float
     parallel_engines: bool
     parallel_workers: int
+    file_workers: int
     debug: bool
     api_policy: str
 
@@ -106,6 +107,7 @@ class Config:
             final_block_threshold=safe_float01(os.getenv("FINAL_BLOCK_THRESHOLD", "0.85"), default=0.85),
             parallel_engines=env_bool("MODIMG_PARALLEL_ENGINES", False),
             parallel_workers=max(1, env_int("MODIMG_PARALLEL_WORKERS", 4)),
+            file_workers=max(1, env_int("MODIMG_FILE_WORKERS", 1)),
             debug=env_bool("MODIMG_DEBUG", False) or env_bool("DEBUG", False),
             api_policy=_normalize_api_policy(os.getenv("API_POLICY", "always")),
         )

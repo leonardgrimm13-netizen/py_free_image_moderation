@@ -11,6 +11,22 @@ def _make_image(path) -> None:
     Image.new("RGB", (16, 16), color=(50, 100, 150)).save(path)
 
 
+def _light_env(tmp_path) -> dict[str, str]:
+    import os
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "OPENNSFW2_DISABLE": "1",
+            "NUDENET_DISABLE": "1",
+            "OCR_ENABLE": "0",
+            "FORBIDDEN_SYMBOLS_YOLO_ENABLE": "0",
+            "YOLO_WEAPON_MODEL": str(tmp_path / "missing-weapons.pt"),
+        }
+    )
+    return env
+
+
 def test_cli_benchmark_json_file(tmp_path) -> None:
     img_path = tmp_path / "sample.png"
     bench_path = tmp_path / "benchmark.json"
@@ -23,6 +39,7 @@ def test_cli_benchmark_json_file(tmp_path) -> None:
         text=True,
         encoding="utf-8",
         errors="replace",
+        env=_light_env(tmp_path),
     )
 
     combined = f"{proc.stdout}\n{proc.stderr}"
@@ -52,6 +69,7 @@ def test_cli_benchmark_console_does_not_crash(tmp_path) -> None:
         text=True,
         encoding="utf-8",
         errors="replace",
+        env=_light_env(tmp_path),
     )
 
     combined = f"{proc.stdout}\n{proc.stderr}"
@@ -74,6 +92,7 @@ def test_cli_benchmark_does_not_change_old_json_single_report(tmp_path) -> None:
         text=True,
         encoding="utf-8",
         errors="replace",
+        env=_light_env(tmp_path),
     )
 
     assert proc.returncode in (0, 2)
@@ -110,6 +129,7 @@ def test_cli_benchmark_still_does_not_change_old_json_single_report(tmp_path) ->
         text=True,
         encoding="utf-8",
         errors="replace",
+        env=_light_env(tmp_path),
     )
 
     assert proc.returncode in (0, 2)
@@ -138,3 +158,47 @@ def test_cli_benchmark_help_lists_flags() -> None:
     help_text = f"{proc.stdout}\n{proc.stderr}"
     assert "--benchmark" in help_text
     assert "--benchmark-json" in help_text
+
+
+def test_cli_benchmark_wall_time_is_measured_for_all_file_worker_modes(monkeypatch, tmp_path) -> None:
+    from modimg import cli
+    from modimg.enums import EngineStatus, VerdictLabel
+    from modimg.types import EngineResult, Verdict
+
+    img_dir = tmp_path / "images"
+    img_dir.mkdir()
+    for idx in range(2):
+        (img_dir / f"{idx}.png").write_bytes(b"")
+
+    def fake_process_input(idx, inp, *, no_apis, sample_frames, benchmark_enabled):
+        rep = {
+            "name": inp,
+            "path": inp,
+            "verdict": Verdict(VerdictLabel.OK, 0.0, 0.0, 0.0, []),
+            "results": [EngineResult(name="fake", status=EngineStatus.OK, took_ms=0)],
+            "auto_learn": "",
+        }
+        benchmark_item = {
+            "name": inp,
+            "path": inp,
+            "verdict_label": "OK",
+            "total_ms": 1000,
+            "engine_total_ms": 0,
+            "unattributed_ms": 1000,
+            "engine_count": 1,
+            "slowest_engine": "fake",
+            "slowest_engine_ms": 0,
+            "engines": [{"name": "fake", "status": "ok", "took_ms": 0}],
+        }
+        return idx, rep, benchmark_item if benchmark_enabled else None
+
+    monkeypatch.setattr(cli, "_process_input", fake_process_input)
+
+    for workers in (1, 2):
+        bench_path = tmp_path / f"benchmark-{workers}.json"
+        rc = cli.main([str(img_dir), "--file-workers", str(workers), "--benchmark-json", str(bench_path)])
+
+        payload = json.loads(bench_path.read_text(encoding="utf-8"))
+        assert rc == 0
+        assert payload["total_ms"] == 2000
+        assert payload["total_wall_ms"] < 1000
