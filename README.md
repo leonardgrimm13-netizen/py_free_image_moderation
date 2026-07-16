@@ -1,3 +1,4 @@
+[README.md](https://github.com/user-attachments/files/30100607/README.md)
 # py_free_image_moderation
 A flexible Python project for **image and GIF moderation** with multiple engines (local + API), pHash lists, and clear CLI output.
 
@@ -15,6 +16,7 @@ A flexible Python project for **image and GIF moderation** with multiple engines
 
 ---
 
+<a id="features"></a>
 ## ✨ Features
 - **Multi-stage moderation** for single images, GIFs, directories, and URLs
 - **pHash allowlist/blocklist** for very fast short-circuit decisions; pHash auto-learning is off by default to avoid learning false positives
@@ -32,6 +34,7 @@ A flexible Python project for **image and GIF moderation** with multiple engines
 
 ---
 
+<a id="project-structure"></a>
 ## 📁 Project structure
 ```text
 py_free_image_moderation/
@@ -60,6 +63,7 @@ py_free_image_moderation/
 
 ---
 
+<a id="installation"></a>
 ## ⚙️ Installation
 > Recommended and supported for this project: Python **3.11 or 3.12** in a virtual environment.
 >
@@ -160,6 +164,7 @@ For OCR you typically need a local Tesseract install:
 
 ---
 
+<a id="quickstart"></a>
 ## 🚀 Quickstart
 
 ### Check a single image
@@ -230,6 +235,7 @@ Benchmark JSON field `total_wall_ms` includes only wall-clock time spent process
 
 ---
 
+<a id="verification"></a>
 ## ✅ Verification
 Core install:
 ```bash
@@ -263,10 +269,11 @@ Optional engines may be missing; they must show up as `skipped`/`disabled` in ou
 
 ---
 
+<a id="important-configuration-env"></a>
 ## 🔧 Important configuration (.env)
 Library imports automatically load `.env` from the source/package root. The installed CLI additionally checks the current working directory first, which allows a project-local `.env` without making ordinary imports trust arbitrary working directories. Example:
 
-At each location the loader checks `.env`, then `.env.txt`. It does not load `.env.example` automatically, because that file is documentation and may contain placeholder credentials or heavy optional-engine settings. For best results, copy `.env.example` to `.env` and edit `.env` for your environment.
+The loader checks `.env`, then `.env.txt`. It does not load `.env.example` automatically, because that file is documentation and may contain placeholder credentials or heavy optional-engine settings. For best results, copy `.env.example` to `.env` and edit `.env` for your environment.
 
 Without `OPENAI_CACHE_PATH`, the OpenAI cache uses `XDG_CACHE_HOME` or `~/.cache` on Linux, `LOCALAPPDATA` on Windows, and `~/Library/Caches` on macOS, below `py-free-image-moderation`. An explicit absolute path is used unchanged. For backward compatibility, an explicit relative `OPENAI_CACHE_PATH` remains relative to the source/package root.
 
@@ -384,6 +391,7 @@ Speed tradeoffs:
 
 ---
 
+<a id="result-logic-ok--review--block"></a>
 ## 🧠 Result logic (OK / REVIEW / BLOCK)
 - **Staged pipeline:** `pHash` → local engines → optional API engines → final verdict
 - **pHash short-circuit** can decide early:
@@ -407,6 +415,7 @@ Speed tradeoffs:
 
 ---
 
+<a id="tips-for-running"></a>
 ## 🛠️ Tips for running
 - Start with `--no-apis` to verify the local pipeline and performance first.
 - Use `--json` if results should be processed in CI/CD or backend services.
