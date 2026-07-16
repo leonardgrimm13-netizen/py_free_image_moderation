@@ -3,15 +3,13 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import os
-import site
 import sys
-import sysconfig
 import threading
 from pathlib import Path
 from typing import Any, Dict, List
 
-from ..config import project_root
 from ..enums import EngineStatus
+from ..resources import bundled_resource_candidates, resource_candidates
 from ..types import Engine, EngineResult, Frame
 from ..utils import env_bool, env_float, env_int, env_label_float_map, env_label_set, now_ms, safe_float01
 
@@ -28,30 +26,14 @@ class OptionalModelUnavailable(RuntimeError):
 
 
 def _candidate_model_paths(raw: str) -> list[Path]:
-    p = Path(raw).expanduser()
-    if p.is_absolute():
-        return [p]
-    candidates = [Path(project_root()) / p, Path.cwd() / p]
-    install_roots: list[Path] = [Path(sys.prefix)]
-    for value in (sysconfig.get_path("data"), site.getuserbase()):
-        if value:
-            install_roots.append(Path(value))
-    # Wheels installed with data_files may place the model under an install data root.
-    candidates.extend(root / p for root in install_roots)
-    out: list[Path] = []
-    seen: set[str] = set()
-    for candidate in candidates:
-        key = str(candidate.resolve(strict=False))
-        if key not in seen:
-            seen.add(key)
-            out.append(candidate)
-    return out
+    return resource_candidates(raw)
 
 
 def _resolve_model_path(model_path: str | None = None) -> Path:
     """Resolve forbidden-symbols model path from absolute or project-root-relative input."""
     raw = (model_path or os.getenv("FORBIDDEN_SYMBOLS_YOLO_MODEL", DEFAULT_FORBIDDEN_SYMBOLS_MODEL) or DEFAULT_FORBIDDEN_SYMBOLS_MODEL).strip()
-    candidates = _candidate_model_paths(raw)
+    is_bundled_default = model_path is None and raw == DEFAULT_FORBIDDEN_SYMBOLS_MODEL
+    candidates = bundled_resource_candidates(raw) if is_bundled_default else _candidate_model_paths(raw)
     for candidate in candidates:
         if candidate.exists():
             return candidate.resolve()
@@ -228,19 +210,20 @@ class YOLOForbiddenSymbolsEngine(Engine):
         model_size = model_path.stat().st_size if model_exists else 0
         model_pointer = _looks_like_model_pointer(model_path) if model_exists else False
 
-        conf = env_float("FORBIDDEN_SYMBOLS_YOLO_CONF", 0.20)
-        iou = env_float("FORBIDDEN_SYMBOLS_YOLO_IOU", 0.45)
-        imgsz = env_int("FORBIDDEN_SYMBOLS_YOLO_IMGSZ", 960)
-        max_det = env_int("FORBIDDEN_SYMBOLS_YOLO_MAX_DET", 20)
+        conf = env_float("FORBIDDEN_SYMBOLS_YOLO_CONF", 0.20, min_value=0.0, max_value=1.0)
+        iou = env_float("FORBIDDEN_SYMBOLS_YOLO_IOU", 0.45, min_value=0.0, max_value=1.0)
+        imgsz = max(32, env_int("FORBIDDEN_SYMBOLS_YOLO_IMGSZ", 960))
+        max_det = max(1, env_int("FORBIDDEN_SYMBOLS_YOLO_MAX_DET", 20))
         max_frames = env_int("FORBIDDEN_SYMBOLS_YOLO_MAX_FRAMES", 2)
-        review_conf = env_float("FORBIDDEN_SYMBOLS_YOLO_REVIEW_CONF", 0.30)
-        block_conf = env_float("FORBIDDEN_SYMBOLS_YOLO_BLOCK_CONF", 0.90)
+        review_conf = env_float("FORBIDDEN_SYMBOLS_YOLO_REVIEW_CONF", 0.30, min_value=0.0, max_value=1.0)
+        block_conf = env_float("FORBIDDEN_SYMBOLS_YOLO_BLOCK_CONF", 0.90, min_value=0.0, max_value=1.0)
         label_review_conf = env_label_float_map("FORBIDDEN_SYMBOLS_YOLO_LABEL_REVIEW_CONF")
         label_block_conf = env_label_float_map("FORBIDDEN_SYMBOLS_YOLO_LABEL_BLOCK_CONF")
         if max_frames <= 0:
             return EngineResult(
                 name=self.name,
-                status=EngineStatus.OK,
+                status=EngineStatus.SKIPPED,
+                error="inference disabled via FORBIDDEN_SYMBOLS_YOLO_MAX_FRAMES<=0",
                 scores={
                     "forbidden_symbols_detected": 0.0,
                     "forbidden_symbols_max_conf": 0.0,
@@ -315,7 +298,14 @@ class YOLOForbiddenSymbolsEngine(Engine):
             if not xyxy_values:
                 xyxy_values = [[] for _ in class_ids]
 
-            for raw_cid, raw_conf, raw_box in zip(class_ids, confidences, xyxy_values):
+            if len(class_ids) != len(confidences) or len(class_ids) != len(xyxy_values):
+                raise RuntimeError(
+                    "forbidden symbols YOLO returned inconsistent detection arrays: "
+                    f"{len(class_ids)} classes, {len(confidences)} confidences, "
+                    f"{len(xyxy_values)} boxes"
+                )
+
+            for raw_cid, raw_conf, raw_box in zip(class_ids, confidences, xyxy_values, strict=True):
                 class_id = int(raw_cid)
                 label = _name_for(class_id, result_names, names)
                 if label.strip().lower() in ignore_labels:
@@ -355,46 +345,69 @@ class YOLOForbiddenSymbolsEngine(Engine):
         if batch_enabled:
             images = [fr.pil.convert("RGB") for fr in selected_frames]
             try:
-                results = _results_list(
-                    _predict(
-                        model,
-                        images,
-                        conf=conf,
-                        iou=iou,
-                        imgsz=imgsz,
-                        max_det=max_det,
-                        device=device,
-                        batch=len(images),
-                        lock=predict_lock,
+                try:
+                    results = _results_list(
+                        _predict(
+                            model,
+                            images,
+                            conf=conf,
+                            iou=iou,
+                            imgsz=imgsz,
+                            max_det=max_det,
+                            device=device,
+                            batch=len(images),
+                            lock=predict_lock,
+                        )
                     )
-                )
-            except TypeError:
-                results = []
-                for fr, image in zip(selected_frames, images):
+                except TypeError:
+                    results = []
+                    for fr, image in zip(selected_frames, images, strict=True):
+                        frame_results = _results_list(
+                            _predict(
+                                model,
+                                image,
+                                conf=conf,
+                                iou=iou,
+                                imgsz=imgsz,
+                                max_det=max_det,
+                                device=device,
+                                lock=predict_lock,
+                            )
+                        )
+                        result_count += len(frame_results)
+                        processed_frame_indices.append(int(fr.idx))
+                        for result in frame_results:
+                            _append_detections(fr, image, result)
+                else:
+                    result_count = len(results)
+                    if result_count != len(selected_frames):
+                        return EngineResult(
+                            name=self.name,
+                            status=EngineStatus.ERROR,
+                            error=(
+                                "forbidden symbols YOLO returned an unexpected batch result count: "
+                                f"{result_count} for {len(selected_frames)} frames"
+                            ),
+                            details={"model_path": str(model_path), "result_count": result_count},
+                            took_ms=now_ms() - start,
+                        )
+                    for fr, image, result in zip(selected_frames, images, results, strict=True):
+                        processed_frame_indices.append(int(fr.idx))
+                        _append_detections(fr, image, result)
+            finally:
+                for image in images:
+                    image.close()
+        else:
+            for fr in selected_frames:
+                with fr.pil.convert("RGB") as image:
                     frame_results = _results_list(
                         _predict(model, image, conf=conf, iou=iou, imgsz=imgsz, max_det=max_det, device=device, lock=predict_lock)
                     )
                     result_count += len(frame_results)
                     processed_frame_indices.append(int(fr.idx))
+                    frame_block_hit = False
                     for result in frame_results:
-                        _append_detections(fr, image, result)
-                results = []
-            else:
-                result_count = len(results)
-                for fr, image, result in zip(selected_frames, images, results):
-                    processed_frame_indices.append(int(fr.idx))
-                    _append_detections(fr, image, result)
-        else:
-            for fr in selected_frames:
-                image = fr.pil.convert("RGB")
-                frame_results = _results_list(
-                    _predict(model, image, conf=conf, iou=iou, imgsz=imgsz, max_det=max_det, device=device, lock=predict_lock)
-                )
-                result_count += len(frame_results)
-                processed_frame_indices.append(int(fr.idx))
-                frame_block_hit = False
-                for result in frame_results:
-                    frame_block_hit = _append_detections(fr, image, result) or frame_block_hit
+                        frame_block_hit = _append_detections(fr, image, result) or frame_block_hit
                 if stop_after_block and frame_block_hit:
                     early_stopped = True
                     break

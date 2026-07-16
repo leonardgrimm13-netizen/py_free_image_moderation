@@ -236,6 +236,37 @@ def test_forbidden_symbols_engine_mock_detection(monkeypatch, tmp_path) -> None:
     assert result.details["detections"][0]["bbox_norm_xyxy"] == pytest.approx([0.05, 0.2, 0.55, 0.8])
 
 
+def test_forbidden_symbols_rejects_inconsistent_detection_arrays(monkeypatch, tmp_path) -> None:
+    class BrokenBoxes:
+        cls = [0]
+        conf = []
+        xyxy = [[1, 1, 2, 2]]
+
+    class BrokenResult:
+        names = {0: "test_symbol"}
+        boxes = BrokenBoxes()
+
+    class BrokenYOLO:
+        names = {0: "test_symbol"}
+
+        def __init__(self, model_path: str) -> None:
+            self.model_path = model_path
+
+        def predict(self, image, **kwargs):
+            return [BrokenResult()]
+
+    model = tmp_path / "model.pt"
+    model.write_bytes(b"not a model pointer" * 200)
+    monkeypatch.setitem(sys.modules, "ultralytics", types.SimpleNamespace(YOLO=BrokenYOLO))
+    monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_ENABLE", "1")
+    monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_MODEL", str(model))
+
+    result = YOLOForbiddenSymbolsEngine().execute("dummy.png", _frame())
+
+    assert result.status == EngineStatus.ERROR
+    assert "inconsistent detection arrays" in (result.error or "")
+
+
 def test_forbidden_symbols_batch_parses_multiple_frame_results(monkeypatch, tmp_path) -> None:
     model = tmp_path / "model.pt"
     model.write_bytes(b"not a model pointer" * 200)
@@ -278,9 +309,8 @@ def test_forbidden_symbols_batch_handles_fewer_results_than_frames(monkeypatch, 
 
     result = YOLOForbiddenSymbolsEngine().execute("dummy.png", _frames(2))
 
-    assert result.status == EngineStatus.OK
-    assert result.details["result_count"] == 1
-    assert [d["frame_idx"] for d in result.details["detections"]] == [0]
+    assert result.status == EngineStatus.ERROR
+    assert "result count: 1 for 2 frames" in (result.error or "")
 
 
 def test_forbidden_symbols_serializes_predict_on_cached_model(monkeypatch, tmp_path) -> None:
@@ -470,10 +500,10 @@ def test_forbidden_symbols_model_path_resolution_accepts_installed_data_root(mon
     (tmp_path / "elsewhere").mkdir(exist_ok=True)
     monkeypatch.chdir(tmp_path / "elsewhere")
     monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_MODEL", "models/forbidden_symbols_yolo.pt")
-    monkeypatch.setattr("modimg.engines.forbidden_symbols_yolo.project_root", lambda: str(tmp_path / "project"))
-    monkeypatch.setattr("modimg.engines.forbidden_symbols_yolo.sys.prefix", str(tmp_path / "prefix"))
-    monkeypatch.setattr("modimg.engines.forbidden_symbols_yolo.sysconfig.get_path", lambda name: str(install_root) if name == "data" else "")
-    monkeypatch.setattr("modimg.engines.forbidden_symbols_yolo.site.getuserbase", lambda: str(tmp_path / "userbase"))
+    monkeypatch.setattr("modimg.resources.source_root", lambda: tmp_path / "project")
+    monkeypatch.setattr("modimg.resources.sys.prefix", str(tmp_path / "prefix"))
+    monkeypatch.setattr("modimg.resources.sysconfig.get_path", lambda name: str(install_root) if name == "data" else "")
+    monkeypatch.setattr("modimg.resources.site.getuserbase", lambda: str(tmp_path / "userbase"))
     from modimg.engines.forbidden_symbols_yolo import _resolve_model_path
 
     assert _resolve_model_path() == model.resolve()
@@ -491,7 +521,8 @@ def test_forbidden_symbols_engine_max_frames_zero_skips_inference(monkeypatch, t
 
     result = YOLOForbiddenSymbolsEngine().execute("dummy.png", _frame())
 
-    assert result.status == EngineStatus.OK
+    assert result.status == EngineStatus.SKIPPED
+    assert "inference disabled" in (result.error or "")
     assert result.details["max_frames"] == 0
     assert result.scores["forbidden_symbols_detection_count"] == 0.0
 
@@ -508,7 +539,8 @@ def test_forbidden_symbols_max_frames_zero_does_not_load_model(monkeypatch, tmp_
 
     result = YOLOForbiddenSymbolsEngine().execute("dummy.png", _frame())
 
-    assert result.status == EngineStatus.OK
+    assert result.status == EngineStatus.SKIPPED
+    assert "inference disabled" in (result.error or "")
     assert result.scores["forbidden_symbols_detection_count"] == 0.0
     assert result.details["inference_skipped"] is True
     assert result.details["skip_reason"] == "FORBIDDEN_SYMBOLS_YOLO_MAX_FRAMES<=0"

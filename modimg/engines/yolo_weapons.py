@@ -5,8 +5,8 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-from ..config import project_root
 from ..enums import EngineStatus
+from ..resources import resource_candidates, resolve_bundled_resource_path
 from ..types import Engine, EngineResult, Frame
 from ..utils import env_bool, env_float, env_int, now_ms, safe_float01
 
@@ -28,7 +28,7 @@ def _configured_model_name() -> Tuple[str, bool]:
 
 
 def _default_model_path() -> str:
-    return os.path.join(project_root(), "models", "yolov8s-oiv7.pt")
+    return str(resolve_bundled_resource_path(Path("models") / "yolov8s-oiv7.pt"))
 
 
 def _looks_like_path(model_name: str) -> bool:
@@ -37,18 +37,7 @@ def _looks_like_path(model_name: str) -> bool:
 
 
 def _candidate_model_paths(model_name: str) -> list[Path]:
-    p = Path(model_name).expanduser()
-    if p.is_absolute():
-        return [p]
-    candidates = [Path(project_root()) / p, Path.cwd() / p]
-    out: list[Path] = []
-    seen: set[str] = set()
-    for candidate in candidates:
-        key = str(candidate.resolve(strict=False))
-        if key not in seen:
-            seen.add(key)
-            out.append(candidate)
-    return out
+    return resource_candidates(model_name)
 
 
 def _looks_like_model_pointer(path: Path) -> bool:
@@ -190,6 +179,9 @@ class YOLOWorldWeaponsEngine(Engine):
     name = "YOLO-World weapons"
 
     def available(self):
+        backend = os.getenv("YOLO_BACKEND", "ultralytics").strip().lower()
+        if backend != "ultralytics":
+            return False, f"unsupported YOLO_BACKEND={backend or '<empty>'}; expected ultralytics"
         try:
             import ultralytics  # noqa
         except Exception as e:
@@ -212,8 +204,8 @@ class YOLOWorldWeaponsEngine(Engine):
         predict_lock = _inference_lock(model_ref)
         conf = env_float("YOLO_CONF", 0.25, min_value=0.0, max_value=1.0)
         iou = env_float("YOLO_IOU", 0.45, min_value=0.0, max_value=1.0)
-        imgsz = env_int("YOLO_IMGSZ", 640)
-        max_det = env_int("YOLO_MAX_DET", 50)
+        imgsz = max(32, env_int("YOLO_IMGSZ", 640))
+        max_det = max(1, env_int("YOLO_MAX_DET", 50))
         device = os.getenv("YOLO_DEVICE", "").strip() or None
         max_frames = env_int("YOLO_MAX_FRAMES", 2)
         use = frames[:max_frames] if max_frames > 0 else frames[:1]
@@ -247,14 +239,22 @@ class YOLOWorldWeaponsEngine(Engine):
                 cls_list = list(cls_ids)
                 conf_list = list(confs)
 
-            for cid, cprob in zip(cls_list, conf_list):
+            if len(cls_list) != len(conf_list):
+                raise RuntimeError(
+                    "YOLO weapons returned inconsistent detection arrays: "
+                    f"{len(cls_list)} classes for {len(conf_list)} confidences"
+                )
+            for cid, cprob in zip(cls_list, conf_list, strict=True):
                 nm = _name_for(int(cid)).lower()
-                p = float(cprob)
-                if "firearm" in nm or "gun" in nm or "rifle" in nm or "pistol" in nm:
+                p = safe_float01(cprob)
+                firearm_like = "firearm" in nm or "gun" in nm or "rifle" in nm or "pistol" in nm
+                toy_firearm = "toy" in nm and firearm_like
+                if firearm_like:
                     firearm = max(firearm, p)
-                    firearm_real = max(firearm_real, p)
-                if "toy" in nm and ("gun" in nm or "firearm" in nm):
-                    firearm_toy = max(firearm_toy, p)
+                    if toy_firearm:
+                        firearm_toy = max(firearm_toy, p)
+                    else:
+                        firearm_real = max(firearm_real, p)
                 if "knife" in nm or "dagger" in nm:
                     knife = max(knife, p)
                     knife_danger = max(knife_danger, p)
@@ -262,36 +262,53 @@ class YOLOWorldWeaponsEngine(Engine):
         if batch_enabled and len(use) > 1:
             images = [fr.pil.convert("RGB") for fr in use]
             try:
-                batch_results = _results_list(
-                    _predict(
-                        mdl,
-                        images,
-                        conf=conf,
-                        iou=iou,
-                        imgsz=imgsz,
-                        max_det=max_det,
-                        device=device,
-                        batch=len(images),
-                        lock=predict_lock,
-                    )
-                )
-            except TypeError:
-                batch_results = []
-                for image in images:
-                    batch_results.extend(
-                        _results_list(
-                            _predict(mdl, image, conf=conf, iou=iou, imgsz=imgsz, max_det=max_det, device=device, lock=predict_lock)
+                try:
+                    batch_results = _results_list(
+                        _predict(
+                            mdl,
+                            images,
+                            conf=conf,
+                            iou=iou,
+                            imgsz=imgsz,
+                            max_det=max_det,
+                            device=device,
+                            batch=len(images),
+                            lock=predict_lock,
                         )
                     )
-            for result in batch_results[: len(use)]:
-                _consume_result(result)
+                except TypeError:
+                    batch_results = []
+                    for image in images:
+                        batch_results.extend(
+                            _results_list(
+                                _predict(
+                                    mdl,
+                                    image,
+                                    conf=conf,
+                                    iou=iou,
+                                    imgsz=imgsz,
+                                    max_det=max_det,
+                                    device=device,
+                                    lock=predict_lock,
+                                )
+                            )
+                        )
+                if len(batch_results) != len(use):
+                    raise RuntimeError(
+                        f"YOLO weapons returned {len(batch_results)} results for {len(use)} frames"
+                    )
+                for result in batch_results[: len(use)]:
+                    _consume_result(result)
+            finally:
+                for image in images:
+                    image.close()
         else:
             for fr in use:
-                image = fr.pil.convert("RGB")
-                for result in _results_list(
-                    _predict(mdl, image, conf=conf, iou=iou, imgsz=imgsz, max_det=max_det, device=device, lock=predict_lock)
-                ):
-                    _consume_result(result)
+                with fr.pil.convert("RGB") as image:
+                    for result in _results_list(
+                        _predict(mdl, image, conf=conf, iou=iou, imgsz=imgsz, max_det=max_det, device=device, lock=predict_lock)
+                    ):
+                        _consume_result(result)
 
         firearm_any = max(firearm, firearm_real, firearm_toy)
 

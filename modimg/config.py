@@ -60,16 +60,26 @@ def load_dotenv(path: str, *, override: bool | None = None) -> list[str]:
     return loaded
 
 
-def load_dotenv_candidates() -> tuple[str | None, list[str]]:
-    """Try loading a real dotenv file from the project root.
+def load_dotenv_candidates(*, include_cwd: bool = False) -> tuple[str | None, list[str]]:
+    """Try loading a real dotenv file from trusted runtime locations.
 
     ``.env.example`` is intentionally not loaded as runtime defaults: it is
     documentation and may contain placeholder credentials or heavier example
     settings that should not silently affect imports, tests, or installed CLI
-    runs. Runtime defaults live in :class:`Config` and individual engine code.
+    runs. Library imports inspect only the source/package root. The CLI opts in
+    to checking the current working directory first so installed commands can
+    use a project-local ``.env`` without reading it during an ordinary import.
     """
     root = Path(__file__).resolve().parent.parent
-    candidates = [root / ".env", root / ".env.txt"]
+    roots: list[Path] = []
+    if include_cwd:
+        try:
+            roots.append(Path.cwd())
+        except OSError:
+            pass
+    if root not in roots:
+        roots.append(root)
+    candidates = [candidate for candidate_root in roots for candidate in (candidate_root / ".env", candidate_root / ".env.txt")]
 
     for candidate in candidates:
         if candidate.exists():

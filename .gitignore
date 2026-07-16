@@ -71,3 +71,12 @@ remove_yolo_classes.py
 disable_yolo_classes_in_pt.py
 models/*.before_disable_classes.pt
 models/*.backup.pt
+
+# Codex
+.agents
+.codex
+
+# Coverage
+.coverage
+.coverage.*
+htmlcov/

@@ -2,18 +2,26 @@ from __future__ import annotations
 
 import os
 import tempfile
+import threading
 from typing import Any, List, Tuple, Optional
 from PIL import Image
 
 from ..enums import EngineStatus
 from ..types import Engine, EngineResult
-from ..utils import env_bool, now_ms
+from ..utils import env_bool, now_ms, redact_sensitive_text, safe_float01
 
 class NudeNetEngine(Engine):
     """Offline nudity detection via NudeNet (optional)."""
     name = "NudeNet"
 
     _DETECTOR = None
+    _DETECTOR_LOCK = threading.RLock()
+    _INFERENCE_LOCK = threading.RLock()
+
+    @staticmethod
+    def _is_missing_dependency_error(exc: Exception) -> bool:
+        message = f"{type(exc).__name__}: {exc}".lower()
+        return isinstance(exc, (ImportError, ModuleNotFoundError)) or "no module named" in message
 
     def available(self) -> Tuple[bool, str]:
         if env_bool("NUDENET_DISABLE", False):
@@ -39,16 +47,18 @@ class NudeNetEngine(Engine):
                 took_ms=now_ms() - start,
             )
 
-        if NudeNetEngine._DETECTOR is None:
-            try:
-                NudeNetEngine._DETECTOR = NudeDetector()
-            except Exception as exc:
-                return EngineResult(
-                    name=self.name,
-                    status=EngineStatus.SKIPPED,
-                    error=f"nudenet detector unavailable: {type(exc).__name__}: {exc}",
-                    took_ms=now_ms()-start,
-                )
+        with NudeNetEngine._DETECTOR_LOCK:
+            if NudeNetEngine._DETECTOR is None:
+                try:
+                    NudeNetEngine._DETECTOR = NudeDetector()
+                except Exception as exc:
+                    status = EngineStatus.SKIPPED if self._is_missing_dependency_error(exc) else EngineStatus.ERROR
+                    return EngineResult(
+                        name=self.name,
+                        status=status,
+                        error=redact_sensitive_text(f"nudenet detector unavailable: {type(exc).__name__}: {exc}"),
+                        took_ms=now_ms()-start,
+                    )
         detector = NudeNetEngine._DETECTOR
         exposed_max = 0.0
         covered_max = 0.0
@@ -62,24 +72,25 @@ class NudeNetEngine(Engine):
         def _detect_input_for_frame(frame: Any, frame_count: int) -> str:
             if frame_count == 1 and path and os.path.exists(path):
                 return path
-            im = _to_pil(frame).convert("RGB")
-            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
-            tmp.close()
-            im.save(tmp.name, format="JPEG", quality=90)
-            temp_paths.append(tmp.name)
-            return tmp.name
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+                temp_path = tmp.name
+                temp_paths.append(temp_path)
+            with _to_pil(frame).convert("RGB") as im:
+                im.save(temp_path, format="JPEG", quality=90)
+            return temp_path
 
         frames_use = frames[:1] if not frames else ([frames[0], frames[-1]] if len(frames) > 1 else frames)
         try:
             for fr in frames_use:
                 detect_input = _detect_input_for_frame(fr, len(frames_use))
                 try:
-                    dets = detector.detect(detect_input) or []
+                    with NudeNetEngine._INFERENCE_LOCK:
+                        dets = detector.detect(detect_input) or []
                 except Exception as exc:
                     return EngineResult(
                         name=self.name,
                         status=EngineStatus.ERROR,
-                        error=f"nudenet detection failed: {type(exc).__name__}: {exc}",
+                        error=redact_sensitive_text(f"nudenet detection failed: {type(exc).__name__}: {exc}"),
                         details={"frame_idx": int(getattr(fr, "idx", 0)), "input": detect_input},
                         took_ms=now_ms() - start,
                     )
@@ -88,8 +99,8 @@ class NudeNetEngine(Engine):
                         continue
                     cls = str(d.get("class", "")).upper()
                     try:
-                        score = float(d.get("score", 0.0) or 0.0)
-                    except Exception:
+                        score = safe_float01(d.get("score", 0.0) or 0.0)
+                    except (TypeError, ValueError, OverflowError):
                         continue
                     if "EXPOSED" in cls:
                         exposed_max = max(exposed_max, score)
@@ -99,15 +110,17 @@ class NudeNetEngine(Engine):
             for tmp_path in temp_paths:
                 try:
                     os.remove(tmp_path)
-                except OSError:
-                    pass
+                except FileNotFoundError:
+                    continue
+                except OSError as exc:
+                    self.logger.warning("failed to remove NudeNet temporary file: %s", redact_sensitive_text(exc))
 
         return EngineResult(
             name=self.name,
             status=EngineStatus.OK,
             scores={
-                "nudity_exposed": float(max(0.0, min(1.0, exposed_max))),
-                "nudity_covered": float(max(0.0, min(1.0, covered_max))),
+                "nudity_exposed": safe_float01(exposed_max),
+                "nudity_covered": safe_float01(covered_max),
             },
             took_ms=now_ms()-start,
         )

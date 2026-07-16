@@ -7,11 +7,14 @@ import sys
 
 
 def _protect_stdout_encoding() -> None:
-    """Avoid UnicodeEncodeError on legacy Windows consoles."""
+    """Best-effort protection against UnicodeEncodeError on legacy consoles."""
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if not callable(reconfigure):
+        return
     try:
-        sys.stdout.reconfigure(errors="replace")  # type: ignore[attr-defined]
-    except Exception:
-        pass
+        reconfigure(errors="replace")
+    except (AttributeError, OSError, TypeError, ValueError):
+        return
 
 
 def configure_logging() -> None:

@@ -2,20 +2,40 @@ from __future__ import annotations
 
 import os
 import json
+import math
 import threading
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..enums import EngineStatus
 from ..types import Engine, EngineResult, Frame, mk_skipped
-from ..utils import now_ms
+from ..utils import env_bool, env_float, now_ms, redact_sensitive_text, safe_float01
+
+
+class SightengineRunState:
+    """Share quota disablement within one pipeline run, never across runs."""
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._disabled_reason: Optional[str] = None
+
+    @property
+    def disabled_reason(self) -> Optional[str]:
+        with self._lock:
+            return self._disabled_reason
+
+    def disable(self, reason: str) -> None:
+        with self._lock:
+            if self._disabled_reason is None:
+                self._disabled_reason = reason
 
 
 class SightengineEngine(Engine):
     name = "Sightengine"
     _SESSION_LOCAL = threading.local()
 
-    def __init__(self, models: Optional[str] = None) -> None:
+    def __init__(self, models: Optional[str] = None, *, run_state: Optional[SightengineRunState] = None) -> None:
         super().__init__()
+        self._run_state = run_state or SightengineRunState()
         # Which Sightengine models to call. Keep default simple but useful.
         raw = models if models is not None else os.getenv("SIGHTENGINE_MODELS", "nudity-2.1,weapon,violence,gore-2.0,offensive-2.0")
         self.models = self._normalize_models(raw)
@@ -81,11 +101,22 @@ class SightengineEngine(Engine):
         return session
 
     def available(self) -> Tuple[bool, str]:
-        # Ensure attributes exist + pick up any late env changes
+        if env_bool("SIGHTENGINE_DISABLE", False):
+            return False, "disabled via SIGHTENGINE_DISABLE=1"
+        run_disabled_reason = self._run_state.disabled_reason
+        if run_disabled_reason:
+            self.disabled_reason = run_disabled_reason
+        if self.disabled_reason:
+            return False, self.disabled_reason
+        # Ensure attributes exist + pick up any late env changes.
         self._refresh_creds()
         if not (self.api_user and self.api_secret):
             return False, "SIGHTENGINE_USER / SIGHTENGINE_SECRET not set"
         return True, ""
+
+    def _disable_for_run(self, reason: str) -> None:
+        self._run_state.disable(reason)
+        self.disable(reason)
 
     def run(self, path: str, frames: List[Frame], max_api_frames: int = 3) -> EngineResult:
         start = now_ms()
@@ -118,10 +149,17 @@ class SightengineEngine(Engine):
         def _extract_scores(data: Dict[str, Any]) -> Dict[str, float]:
             scores: Dict[str, float] = {}
 
+            def _finite_number(value: Any) -> float | None:
+                if not isinstance(value, (int, float)):
+                    return None
+                parsed = float(value)
+                return parsed if math.isfinite(parsed) else None
+
             # Total operations used (Sightengine sometimes counts per-model operations)
             ops = data.get("operations")
-            if isinstance(ops, (int, float)):
-                scores["operations_used"] = float(ops)
+            parsed_ops = _finite_number(ops)
+            if parsed_ops is not None:
+                scores["operations_used"] = max(0.0, parsed_ops)
 
             def _pick_model(*names: str) -> Any:
                 for n in names:
@@ -141,7 +179,8 @@ class SightengineEngine(Engine):
 
                 if not legacy_found:
                     def _num(v: Any) -> float:
-                        return float(v) if isinstance(v, (int, float)) else 0.0
+                        parsed = _finite_number(v)
+                        return safe_float01(parsed) if parsed is not None else 0.0
 
                     # Intensity classes (docs): sexual_activity, sexual_display, erotica, very_suggestive, suggestive, mildly_suggestive, none
                     safe = _num(nud.get("none", nud.get("safe", 0.0)))
@@ -159,9 +198,9 @@ class SightengineEngine(Engine):
                                 if kl in {"none", "safe", "neutral", "other", "non_suggestive", "normal", "ok", "no_nudity", "non_nudity", "clothed", "fully_clothed", "covered", "not_nude", "nonnude"}:
                                     continue
                                 if isinstance(vv, (int, float)):
-                                    val = float(vv)
-                                    if val > sugg_max:
-                                        sugg_max = val
+                                    val = _finite_number(vv)
+                                    if val is not None and val > sugg_max:
+                                        sugg_max = safe_float01(val)
                                 else:
                                     _walk_max(vv)
                         elif isinstance(obj, (list, tuple)):
@@ -265,7 +304,13 @@ class SightengineEngine(Engine):
                 if vals:
                     scores["offensive_max"] = float(max(vals))
 
-            return scores
+            normalized: Dict[str, float] = {}
+            for key, value in scores.items():
+                parsed = _finite_number(value)
+                if parsed is None:
+                    continue
+                normalized[key] = max(0.0, parsed) if key == "operations_used" else safe_float01(parsed)
+            return normalized
 
         best_scores: Dict[str, float] = {}
         per_frame: List[Dict[str, Any]] = []
@@ -273,33 +318,69 @@ class SightengineEngine(Engine):
         for fr in use_frames:
             files = {"media": ("frame.jpg", fr.get_jpeg_bytes(), "image/jpeg")}
             try:
-                r = session.post(url, data=params_base, files=files, timeout=60)
+                timeout = env_float("SIGHTENGINE_TIMEOUT_SEC", 60.0, min_value=0.1)
+                r = session.post(url, data=params_base, files=files, timeout=timeout)
             except Exception as exc:
                 return EngineResult(
                     name=self.name,
                     status=EngineStatus.ERROR,
-                    error=f"request failed: {type(exc).__name__}: {exc}",
+                    error=redact_sensitive_text(f"request failed: {type(exc).__name__}: {exc}"),
                     took_ms=now_ms() - start,
                 )
 
-            if r.status_code in (402, 403, 429):
-                self.disable(f"quota/limit http={r.status_code}")
+            try:
+                status_code = int(r.status_code)
+            except (TypeError, ValueError, OverflowError):
+                return EngineResult(
+                    name=self.name,
+                    status=EngineStatus.ERROR,
+                    error="Sightengine returned an invalid HTTP status",
+                    took_ms=now_ms() - start,
+                )
+            if status_code in (402, 403, 429):
+                self._disable_for_run(f"quota/limit http={status_code}")
                 return mk_skipped(self, self.disabled_reason or "quota/limit", took_ms=now_ms() - start)
-            if r.status_code >= 400:
-                return EngineResult(name=self.name, status=EngineStatus.ERROR, error=f"http error {r.status_code}", took_ms=now_ms() - start)
+            if status_code >= 400:
+                return EngineResult(name=self.name, status=EngineStatus.ERROR, error=f"http error {status_code}", took_ms=now_ms() - start)
 
             try:
-                data = r.json() if "application/json" in r.headers.get("content-type", "") else json.loads(r.text or "{}")
+                headers = getattr(r, "headers", {}) or {}
+                data = r.json() if "application/json" in str(headers.get("content-type", "")).lower() else json.loads(r.text or "{}")
             except Exception as exc:
-                return EngineResult(name=self.name, status=EngineStatus.ERROR, error=f"invalid JSON response: {type(exc).__name__}: {exc}", took_ms=now_ms() - start)
-            if data.get("status") != "success":
+                return EngineResult(
+                    name=self.name,
+                    status=EngineStatus.ERROR,
+                    error=redact_sensitive_text(f"invalid JSON response: {type(exc).__name__}: {exc}"),
+                    took_ms=now_ms() - start,
+                )
+            if not isinstance(data, dict):
+                return EngineResult(
+                    name=self.name,
+                    status=EngineStatus.ERROR,
+                    error="invalid JSON response: expected an object",
+                    took_ms=now_ms() - start,
+                )
+            if str(data.get("status") or "").lower() != "success":
                 err = data.get("error") or data.get("message") or str(data)
                 if "quota" in str(err).lower() or "limit" in str(err).lower():
-                    self.disable(f"quota/limit: {str(err)[:200]}")
+                    self._disable_for_run(f"quota/limit: {redact_sensitive_text(err)[:200]}")
                     return mk_skipped(self, self.disabled_reason or "quota/limit", took_ms=now_ms() - start)
-                return EngineResult(name=self.name, status=EngineStatus.ERROR, error=str(err)[:400], details={"raw": data}, took_ms=now_ms() - start)
+                return EngineResult(
+                    name=self.name,
+                    status=EngineStatus.ERROR,
+                    error=redact_sensitive_text(err)[:400],
+                    details={"api_status": str(data.get("status") or "")[:80]},
+                    took_ms=now_ms() - start,
+                )
 
             sc = _extract_scores(data)
+            if not any(key != "operations_used" for key in sc):
+                return EngineResult(
+                    name=self.name,
+                    status=EngineStatus.ERROR,
+                    error="Sightengine success response contained no recognized moderation scores",
+                    took_ms=now_ms() - start,
+                )
             per_frame.append({"frame": int(fr.idx), "scores": sc})
             for k, v in sc.items():
                 if isinstance(v, (int, float)):

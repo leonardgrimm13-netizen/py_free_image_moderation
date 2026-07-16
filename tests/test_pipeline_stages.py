@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from PIL import Image
 
 from modimg.config import get_config
 from modimg.enums import EngineStatus, VerdictLabel
 from modimg.pipeline import build_main_engines, run_on_input
-from modimg.types import Engine, EngineResult
+from modimg.types import Engine, EngineResult, Frame
 
 
 class FakeEngine(Engine):
@@ -250,7 +251,10 @@ def test_run_on_input_cleans_downloaded_temp_file_on_engine_error(monkeypatch, t
             raise RuntimeError("boom")
 
     monkeypatch.setattr("modimg.pipeline.is_url", lambda value: True)
-    monkeypatch.setattr("modimg.pipeline.download_url_to_temp", lambda value: (str(temp_download), "downloaded.png"))
+    monkeypatch.setattr(
+        "modimg.pipeline.download_url_to_temp",
+        lambda value, **kwargs: (str(temp_download), "downloaded.png"),
+    )
     monkeypatch.setattr("modimg.pipeline.build_pre_engines", lambda **kwargs: [])
     monkeypatch.setattr("modimg.pipeline.build_local_engines", lambda **kwargs: [FailingEngine("failing")])
     monkeypatch.setattr("modimg.pipeline.build_api_engines", lambda **kwargs: [])
@@ -260,3 +264,36 @@ def test_run_on_input_cleans_downloaded_temp_file_on_engine_error(monkeypatch, t
     assert seen["exists_during_engine"] is True
     assert temp_download.exists() is False
     assert out["results"][0].status == EngineStatus.ERROR
+
+
+def test_run_on_input_closes_decoded_frames(monkeypatch) -> None:
+    frame = Frame(idx=0, pil=Image.new("RGB", (4, 4)))
+    monkeypatch.setattr("modimg.pipeline.load_frames", lambda path, sample_frames: [frame])
+    monkeypatch.setattr("modimg.pipeline.build_pre_engines", lambda **kwargs: [])
+    monkeypatch.setattr("modimg.pipeline.build_local_engines", lambda **kwargs: [])
+    monkeypatch.setattr("modimg.pipeline.build_api_engines", lambda **kwargs: [])
+
+    run_on_input("dummy.png", no_apis=True)
+
+    with pytest.raises(ValueError):
+        frame.pil.getpixel((0, 0))
+
+
+def test_run_on_input_redacts_remote_query_from_report(monkeypatch, tmp_path) -> None:
+    downloaded = tmp_path / "downloaded.png"
+    Image.new("RGB", (4, 4)).save(downloaded)
+    monkeypatch.setattr("modimg.pipeline.is_url", lambda value: True)
+    monkeypatch.setattr(
+        "modimg.pipeline.download_url_to_temp",
+        lambda value, **kwargs: (str(downloaded), "downloaded.png"),
+    )
+    monkeypatch.setattr("modimg.pipeline.build_pre_engines", lambda **kwargs: [])
+    monkeypatch.setattr("modimg.pipeline.build_local_engines", lambda **kwargs: [])
+    monkeypatch.setattr("modimg.pipeline.build_api_engines", lambda **kwargs: [])
+
+    report = run_on_input("https://example.test/image.png?token=top-secret#fragment", no_apis=True)
+
+    assert "top-secret" not in report["path"]
+    assert "fragment" not in report["path"]
+    assert report["path"] == "https://example.test/image.png?<redacted>"
+    assert downloaded.exists() is False

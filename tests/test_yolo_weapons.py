@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
+import types
 from concurrent.futures import ThreadPoolExecutor
 
 from PIL import Image
@@ -10,6 +11,7 @@ from modimg.engines import yolo_weapons
 from modimg.engines.yolo_weapons import YOLOWorldWeaponsEngine
 from modimg.enums import EngineStatus
 from modimg.types import Frame
+from modimg.verdict import compute_verdict
 
 
 class FakeBoxes:
@@ -59,6 +61,28 @@ def test_yolo_weapons_batch_parses_multiple_frame_results(monkeypatch) -> None:
     assert fake_model.calls[0][1]["batch"] == 2
 
 
+def test_yolo_weapons_rejects_incomplete_batch_results(monkeypatch) -> None:
+    class IncompleteBatchModel(FakeWeaponModel):
+        def predict(self, image, **kwargs):
+            return [FakeResult(0, 0.61)]
+
+    monkeypatch.setenv("YOLO_BATCH_ENABLE", "1")
+    monkeypatch.setenv("YOLO_MAX_FRAMES", "2")
+    monkeypatch.setattr("modimg.engines.yolo_weapons._resolve_model_reference", lambda: ("fake.pt", True, None))
+    monkeypatch.setattr("modimg.engines.yolo_weapons._load_model", lambda model_ref: IncompleteBatchModel())
+    frames = [
+        Frame(idx=0, pil=Image.new("RGB", (16, 16))),
+        Frame(idx=1, pil=Image.new("RGB", (16, 16))),
+    ]
+    engine = YOLOWorldWeaponsEngine()
+    monkeypatch.setattr(engine, "available", lambda: (True, ""))
+
+    result = engine.execute("dummy.png", frames)
+
+    assert result.status == EngineStatus.ERROR
+    assert "returned 1 results for 2 frames" in (result.error or "")
+
+
 def test_yolo_weapons_serializes_predict_on_cached_model(monkeypatch) -> None:
     class ConcurrentFakeWeaponModel(FakeWeaponModel):
         def __init__(self) -> None:
@@ -102,3 +126,45 @@ def test_yolo_weapons_serializes_predict_on_cached_model(monkeypatch) -> None:
     assert fake_model.max_active == 1
     assert len(fake_model.calls) == 2
     assert all(is_batch is True for is_batch, _ in fake_model.calls)
+
+
+def test_yolo_toy_gun_is_not_classified_as_realistic(monkeypatch) -> None:
+    class ToyModel(FakeWeaponModel):
+        names = {0: "toy gun"}
+
+        def predict(self, image, **kwargs):
+            return [FakeResult(0, 0.8)]
+
+    monkeypatch.setenv("ALLOW_TOY_GUN", "1")
+    monkeypatch.setattr("modimg.engines.yolo_weapons._resolve_model_reference", lambda: ("toy.pt", True, None))
+    monkeypatch.setattr("modimg.engines.yolo_weapons._load_model", lambda model_ref: ToyModel())
+    frame = Frame(idx=0, pil=Image.new("RGB", (16, 16)))
+
+    result = YOLOWorldWeaponsEngine().run("dummy.png", [frame])
+    verdict = compute_verdict([result])
+
+    assert result.scores["yolo_firearm_toy"] == 0.8
+    assert result.scores["yolo_firearm_realistic"] == 0.0
+    assert verdict.label.value == "OK"
+
+
+def test_yolo_weapons_rejects_inconsistent_detection_arrays(monkeypatch) -> None:
+    class BrokenBoxes:
+        cls = [0]
+        conf = []
+
+    class BrokenModel:
+        names = {0: "gun"}
+
+        def predict(self, image, **kwargs):
+            return [types.SimpleNamespace(boxes=BrokenBoxes())]
+
+    engine = YOLOWorldWeaponsEngine()
+    monkeypatch.setattr(engine, "available", lambda: (True, ""))
+    monkeypatch.setattr("modimg.engines.yolo_weapons._resolve_model_reference", lambda: ("broken.pt", True, None))
+    monkeypatch.setattr("modimg.engines.yolo_weapons._load_model", lambda model_ref: BrokenModel())
+
+    result = engine.execute("dummy.png", [Frame(idx=0, pil=Image.new("RGB", (4, 4)))])
+
+    assert result.status == EngineStatus.ERROR
+    assert "inconsistent detection arrays" in (result.error or "")
