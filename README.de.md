@@ -1,3 +1,4 @@
+[README.de.md](https://github.com/user-attachments/files/30100764/README.de.md)
 # py_free_image_moderation
 Ein flexibles Python-Projekt zur **Bild- und GIF-Moderation** mit mehreren Engines (lokal + API), pHash-Listen und klarer CLI-Ausgabe.
 
@@ -11,10 +12,11 @@ Ein flexibles Python-Projekt zur **Bild- und GIF-Moderation** mit mehreren Engin
 - [Verifikation](#verifikation)
 - [Wichtige Konfiguration (.env)](#wichtige-konfiguration-env)
 - [Ergebnislogik (OK / REVIEW / BLOCK)](#ergebnislogik-ok--review--block)
-- [Tipps für den Betrieb](#tipps-für-den-betrieb)
+- [Tipps für den Betrieb](#tipps-fuer-den-betrieb)
 
 ---
 
+<a name="features"></a>
 ## ✨ Features
 - **Mehrstufige Moderation** für einzelne Bilder, GIFs, Verzeichnisse und URLs
 - **pHash Allowlist/Blocklist** für sehr schnelle Short-Circuit-Entscheidungen
@@ -32,6 +34,7 @@ Ein flexibles Python-Projekt zur **Bild- und GIF-Moderation** mit mehreren Engin
 
 ---
 
+<a name="projektstruktur"></a>
 ## 📁 Projektstruktur
 ```text
 py_free_image_moderation/
@@ -60,6 +63,7 @@ py_free_image_moderation/
 
 ---
 
+<a name="installation"></a>
 ## ⚙️ Installation
 > Empfohlen und für dieses Projekt unterstützt: Python **3.11 oder 3.12** in einer virtuellen Umgebung.
 >
@@ -160,6 +164,7 @@ Für OCR wird in der Regel eine lokale Tesseract-Installation benötigt:
 
 ---
 
+<a name="schnellstart"></a>
 ## 🚀 Schnellstart
 
 ### Einzelnes Bild prüfen
@@ -230,6 +235,7 @@ Das Benchmark-JSON-Feld `total_wall_ms` enthält nur die Wall-Clock-Zeit für di
 
 ---
 
+<a name="verifikation"></a>
 ## ✅ Verifikation
 Core-Installation:
 ```bash
@@ -263,6 +269,7 @@ Optionale Engines dürfen fehlen; sie müssen in der Ausgabe sauber als `skipped
 
 ---
 
+<a name="wichtige-konfiguration-env"></a>
 ## 🔧 Wichtige Konfiguration (.env)
 Bibliotheksimporte laden `.env` automatisch aus dem Quell-/Paket-Root. Die installierte CLI prüft zusätzlich zuerst das aktuelle Arbeitsverzeichnis. Dadurch kann sie eine projektlokale `.env` verwenden, ohne dass normale Importe beliebigen Arbeitsverzeichnissen vertrauen. Beispiel:
 
@@ -385,6 +392,7 @@ Speed-Tradeoffs:
 
 ---
 
+<a name="ergebnislogik-ok--review--block"></a>
 ## 🧠 Ergebnislogik (OK / REVIEW / BLOCK)
 - **Staged Pipeline:** `pHash` → lokale Engines → optionale API-Engines → finales Urteil
 - **pHash-Short-Circuit** kann früh entscheiden:
@@ -408,6 +416,7 @@ Speed-Tradeoffs:
 
 ---
 
+<a name="tipps-fuer-den-betrieb"></a>
 ## 🛠️ Tipps für den Betrieb
 - Starte zuerst mit `--no-apis`, um lokale Pipeline und Performance zu prüfen.
 - Nutze `--json`, wenn Ergebnisse in CI/CD oder Backend-Services weiterverarbeitet werden sollen.
