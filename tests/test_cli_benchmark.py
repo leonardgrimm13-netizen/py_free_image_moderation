@@ -170,7 +170,19 @@ def test_cli_benchmark_wall_time_is_measured_for_all_file_worker_modes(monkeypat
     for idx in range(2):
         (img_dir / f"{idx}.png").write_bytes(b"")
 
-    def fake_process_input(idx, inp, *, no_apis, sample_frames, benchmark_enabled):
+    seen_run_states = []
+
+    def fake_process_input(
+        idx,
+        inp,
+        *,
+        no_apis,
+        sample_frames,
+        benchmark_enabled,
+        openai_run_state,
+        sightengine_run_state,
+    ):
+        seen_run_states.append((openai_run_state, sightengine_run_state))
         rep = {
             "name": inp,
             "path": inp,
@@ -193,8 +205,16 @@ def test_cli_benchmark_wall_time_is_measured_for_all_file_worker_modes(monkeypat
         return idx, rep, benchmark_item if benchmark_enabled else None
 
     monkeypatch.setattr(cli, "_process_input", fake_process_input)
+    dotenv_cwd_flags = []
+    monkeypatch.setattr(
+        cli,
+        "load_dotenv_candidates",
+        lambda *, include_cwd=False: dotenv_cwd_flags.append(include_cwd) or (None, []),
+    )
 
+    states_by_cli_run = []
     for workers in (1, 2):
+        state_start = len(seen_run_states)
         bench_path = tmp_path / f"benchmark-{workers}.json"
         rc = cli.main([str(img_dir), "--file-workers", str(workers), "--benchmark-json", str(bench_path)])
 
@@ -202,3 +222,11 @@ def test_cli_benchmark_wall_time_is_measured_for_all_file_worker_modes(monkeypat
         assert rc == 0
         assert payload["total_ms"] == 2000
         assert payload["total_wall_ms"] < 1000
+        states_for_run = seen_run_states[state_start:]
+        assert len({id(openai_state) for openai_state, _ in states_for_run}) == 1
+        assert len({id(sightengine_state) for _, sightengine_state in states_for_run}) == 1
+        states_by_cli_run.append(states_for_run[0])
+
+    assert states_by_cli_run[0][0] is not states_by_cli_run[1][0]
+    assert states_by_cli_run[0][1] is not states_by_cli_run[1][1]
+    assert dotenv_cwd_flags == [True, True]

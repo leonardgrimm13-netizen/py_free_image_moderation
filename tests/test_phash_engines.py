@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import threading
 
 from PIL import Image
 
@@ -118,3 +119,49 @@ def test_parallel_phash_append_does_not_duplicate_entries(tmp_path) -> None:
     lines = [line for line in allowlist.read_text(encoding="utf-8").splitlines() if line.strip()]
     assert lines == [f"{hx},known"]
     assert results.count(True) == 1
+
+
+def test_phash_append_keeps_original_file_on_atomic_write_failure(monkeypatch, tmp_path) -> None:
+    allowlist = tmp_path / "allow.txt"
+    allowlist.write_text("0123456789abcdef,existing\n", encoding="utf-8")
+
+    def fail_write(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr("modimg.phash.atomic_write_text", fail_write)
+
+    assert append_phash_to_allowlist("fedcba9876543210", str(allowlist), "new") is False
+    assert allowlist.read_text(encoding="utf-8") == "0123456789abcdef,existing\n"
+
+
+def test_phash_append_sanitizes_label_and_rejects_invalid_hash(tmp_path) -> None:
+    allowlist = tmp_path / "allow.txt"
+
+    assert append_phash_to_allowlist("not-hex", str(allowlist), "bad") is False
+    assert append_phash_to_allowlist("0123456789abcdef", str(allowlist), "trusted,\nlabel") is True
+    assert allowlist.read_text(encoding="utf-8") == "0123456789abcdef,trusted label\n"
+
+
+def test_frame_phash_cache_is_computed_once_across_threads(monkeypatch) -> None:
+    frame = _frame()
+    start = threading.Barrier(8)
+    calls = 0
+    calls_lock = threading.Lock()
+
+    def fake_hash(image) -> str:
+        nonlocal calls
+        with calls_lock:
+            calls += 1
+        return "0123456789abcdef"
+
+    monkeypatch.setattr("modimg.phash.phash_hex_from_pil", fake_hash)
+
+    def work(_index: int):
+        start.wait(timeout=2)
+        return frame_phash_hex_int(frame)
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        results = list(executor.map(work, range(8)))
+
+    assert results == [("0123456789abcdef", 0x0123456789ABCDEF)] * 8
+    assert calls == 1

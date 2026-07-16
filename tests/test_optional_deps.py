@@ -111,7 +111,7 @@ def test_yolo_skips_when_default_model_path_missing(monkeypatch, tmp_path) -> No
     monkeypatch.setenv("YOLO_WEAPON_MODEL", "")
     monkeypatch.setenv("YOLO_WEAPONS_WEIGHTS", "")
     monkeypatch.setattr(engine, "available", lambda: (True, "ok"))
-    monkeypatch.setattr("modimg.engines.yolo_weapons.project_root", lambda: str(tmp_path))
+    monkeypatch.setattr("modimg.engines.yolo_weapons.resolve_bundled_resource_path", lambda path: tmp_path / path)
 
     frame = Frame(idx=0, pil=Image.new("RGB", (2, 2)))
     result = engine.run(path="dummy.png", frames=[frame])
@@ -147,7 +147,7 @@ def test_yolo_weapon_model_project_root_relative_path(monkeypatch, tmp_path) -> 
     monkeypatch.setenv("YOLO_WORLD_MODEL", "")
     monkeypatch.setenv("YOLO_WEAPON_MODEL", "weights/weapon.pt")
     monkeypatch.setenv("YOLO_WEAPONS_WEIGHTS", "")
-    monkeypatch.setattr(yolo_weapons, "project_root", lambda: str(tmp_path))
+    monkeypatch.setattr(yolo_weapons, "resource_candidates", lambda path: [tmp_path / path])
     yolo_weapons._YOLO_CACHE.clear()
 
     frame = Frame(idx=0, pil=Image.new("RGB", (2, 2)))
@@ -173,7 +173,7 @@ def test_yolo_weapon_model_missing_explicit_path_skips_before_import(monkeypatch
     monkeypatch.setenv("YOLO_WORLD_MODEL", "")
     monkeypatch.setenv("YOLO_WEAPON_MODEL", "weights/missing.pt")
     monkeypatch.setenv("YOLO_WEAPONS_WEIGHTS", "")
-    monkeypatch.setattr(yolo_weapons, "project_root", lambda: str(tmp_path))
+    monkeypatch.setattr(yolo_weapons, "resource_candidates", lambda path: [tmp_path / path])
     monkeypatch.setattr(builtins, "__import__", fail_ultralytics_import)
 
     frame = Frame(idx=0, pil=Image.new("RGB", (2, 2)))

@@ -1,4 +1,4 @@
-include README.md README.de.md requirements*.txt
+include .env.example README.md README.de.md CHANGELOG.md CONTRIBUTING.md moderate_image.py requirements*.txt
 include models/forbidden_symbols_yolo.pt
 include models/yolov8s-oiv7.pt
 recursive-include data *.txt

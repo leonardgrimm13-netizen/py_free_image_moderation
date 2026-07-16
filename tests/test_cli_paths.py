@@ -163,3 +163,54 @@ def test_invalid_image_returns_loader_error_json(tmp_path) -> None:
 
 def test_windows_style_uppercase_image_path_detection() -> None:
     assert is_image_file(r"C:\Users\me\Pictures\Test Image.PNG") is True
+
+
+def test_directory_scan_includes_extensionless_image(tmp_path) -> None:
+    image = tmp_path / "extensionless"
+    report = tmp_path / "report.json"
+    Image.new("RGB", (8, 8), color=(20, 40, 60)).save(image, format="PNG")
+
+    proc = subprocess.run(
+        [sys.executable, "moderate_image.py", str(tmp_path), "--no-apis", "--json", str(report)],
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=_fast_env(),
+    )
+
+    assert proc.returncode == 0
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["path"] == str(image)
+
+
+def test_cli_accepts_multiple_explicit_inputs_and_deduplicates(tmp_path) -> None:
+    first = tmp_path / "first.png"
+    second = tmp_path / "second.png"
+    report = tmp_path / "report.json"
+    _make_image(first)
+    _make_image(second)
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "moderate_image.py",
+            str(first),
+            str(second),
+            str(first),
+            "--no-apis",
+            "--json",
+            str(report),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=_fast_env(),
+    )
+
+    assert proc.returncode == 0
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert [item["path"] for item in payload] == [str(first), str(second)]

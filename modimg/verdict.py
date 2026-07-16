@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from .config import get_config
 from .enums import EngineStatus, VerdictLabel
@@ -21,13 +21,6 @@ class _VerdictState:
         if value >= threshold:
             self.reasons.append(reason)
         setattr(self, attr, max(getattr(self, attr), value))
-
-
-def _safe_float(value: object, default: float = 0.0) -> float:
-    try:
-        return float(value)
-    except Exception:
-        return float(default)
 
 
 def _no_checks_policy() -> str:
@@ -98,7 +91,6 @@ def _apply_phash(r: EngineResult, state: _VerdictState) -> Verdict | None:
     if r.name == "pHash allowlist" and safe_float01(s.get("phash_allow_match", 0.0) or 0.0) >= 1.0:
         lbl = (r.details or {}).get("match_label") or (r.details or {}).get("matched_label")
         state.reasons.append("pHash allowlist match" + (f" ({lbl})" if lbl else ""))
-        return Verdict(VerdictLabel.OK, 0.0, 0.0, 0.0, state.reasons)
     if r.name == "pHash blocklist" and safe_float01(s.get("phash_block_match", 0.0)) >= 1.0:
         lbl = (r.details or {}).get("match_label") or (r.details or {}).get("matched_label")
         state.reasons.append("pHash blocklist match" + (f" ({lbl})" if lbl else ""))
@@ -134,8 +126,8 @@ def _apply_forbidden_symbols(r: EngineResult, state: _VerdictState) -> None:
     scores = r.scores or {}
     details = r.details or {}
     max_conf = safe_float01(scores.get("forbidden_symbols_max_conf", 0.0))
-    block_conf = env_float("FORBIDDEN_SYMBOLS_YOLO_BLOCK_CONF", 0.90)
-    review_conf = env_float("FORBIDDEN_SYMBOLS_YOLO_REVIEW_CONF", 0.30)
+    block_conf = env_float("FORBIDDEN_SYMBOLS_YOLO_BLOCK_CONF", 0.90, min_value=0.0, max_value=1.0)
+    review_conf = env_float("FORBIDDEN_SYMBOLS_YOLO_REVIEW_CONF", 0.30, min_value=0.0, max_value=1.0)
     label_block_conf = env_label_float_map("FORBIDDEN_SYMBOLS_YOLO_LABEL_BLOCK_CONF")
     label_review_conf = env_label_float_map("FORBIDDEN_SYMBOLS_YOLO_LABEL_REVIEW_CONF")
     top_label = str(details.get("top_label") or "").strip()
@@ -165,7 +157,7 @@ def _apply_forbidden_symbols(r: EngineResult, state: _VerdictState) -> None:
         label, confidence = _trigger_details("review_detection")
         label_part = f": {label}" if label else ""
         state.reasons.append(f"YOLO possible forbidden symbol{label_part} confidence={confidence:.2f}")
-        state.hate = max(state.hate, env_float("FINAL_REVIEW_THRESHOLD", 0.40))
+        state.hate = max(state.hate, env_float("FINAL_REVIEW_THRESHOLD", 0.40, min_value=0.0, max_value=1.0))
 
 
 def _apply_yolo_weapons(r: EngineResult, state: _VerdictState) -> None:
@@ -173,22 +165,22 @@ def _apply_yolo_weapons(r: EngineResult, state: _VerdictState) -> None:
         return
     s = r.scores or {}
     realistic = safe_float01(s.get("yolo_firearm_realistic", 0.0))
-    y_firearm_thresh = env_float("YOLO_FIREARM_THRESH", 0.35)
+    y_firearm_thresh = env_float("YOLO_FIREARM_THRESH", 0.35, min_value=0.0, max_value=1.0)
     if realistic >= y_firearm_thresh:
         state.reasons.append(f"YOLO firearm realistic={realistic:.2f}")
         state.violence = max(state.violence, 1.0)
     toy = safe_float01(s.get("yolo_firearm_toy", 0.0))
     any_firearm = safe_float01(s.get("yolo_firearm", 0.0))
-    toy_thresh = env_float("YOLO_FIREARM_TOY_THRESH", 0.25)
+    toy_thresh = env_float("YOLO_FIREARM_TOY_THRESH", 0.25, min_value=0.0, max_value=1.0)
     if (not env_bool("ALLOW_TOY_GUN", False)) and (toy >= toy_thresh or any_firearm >= y_firearm_thresh):
         state.reasons.append(f"YOLO firearm-like (toy/uncertain)={max(toy, any_firearm):.2f}")
         state.violence = max(state.violence, 1.0)
     danger = safe_float01(s.get("yolo_knife_dangerous", 0.0))
-    if danger >= env_float("YOLO_DANGEROUS_KNIFE_THRESH", 0.35):
+    if danger >= env_float("YOLO_DANGEROUS_KNIFE_THRESH", 0.35, min_value=0.0, max_value=1.0):
         state.reasons.append(f"YOLO dangerous knife={danger:.2f}")
         state.violence = max(state.violence, 1.0)
     knife = safe_float01(s.get("yolo_knife", 0.0))
-    if env_bool("YOLO_KNIFE_BLOCK_ALL", False) and knife >= env_float("YOLO_KNIFE_THRESH", 0.65):
+    if env_bool("YOLO_KNIFE_BLOCK_ALL", False) and knife >= env_float("YOLO_KNIFE_THRESH", 0.65, min_value=0.0, max_value=1.0):
         state.reasons.append(f"YOLO knife={knife:.2f}")
         state.violence = max(state.violence, 1.0)
 
@@ -208,9 +200,9 @@ def _apply_sightengine(r: EngineResult, state: _VerdictState) -> None:
     firearm = safe_float01(s.get("weapon_firearm", 0.0))
     firearm_toy = safe_float01(s.get("weapon_firearm_toy", 0.0))
     firearm_gesture = safe_float01(s.get("weapon_firearm_gesture", 0.0))
-    firearm_animated = _safe_float(s.get("weapon_firearm_type_animated", 0.0))
+    firearm_animated = safe_float01(s.get("weapon_firearm_type_animated", 0.0))
     realistic_firearm = firearm * (1.0 - max(firearm_toy, firearm_gesture, firearm_animated))
-    se_firearm_thresh = env_float("SE_FIREARM_THRESH", 0.35)
+    se_firearm_thresh = env_float("SE_FIREARM_THRESH", 0.35, min_value=0.0, max_value=1.0)
     if env_bool("SE_BLOCK_ANY_FIREARM", False) and firearm >= se_firearm_thresh:
         state.reasons.append(f"Sightengine firearm(any)={firearm:.2f} (toy={firearm_toy:.2f}, gesture={firearm_gesture:.2f}, animated={firearm_animated:.2f})")
         state.violence = max(state.violence, 1.0)
@@ -220,21 +212,32 @@ def _apply_sightengine(r: EngineResult, state: _VerdictState) -> None:
     vio_prob = safe_float01(s.get("violence_prob", 0.0))
     vio_phys = safe_float01(s.get("violence_physical_violence", 0.0))
     vio_firearm_threat = safe_float01(s.get("violence_firearm_threat", 0.0))
-    if max(vio_prob, vio_phys, vio_firearm_threat) >= env_float("SE_VIOLENCE_THRESH", 0.30):
+    if max(vio_prob, vio_phys, vio_firearm_threat) >= env_float("SE_VIOLENCE_THRESH", 0.30, min_value=0.0, max_value=1.0):
         state.reasons.append(f"Sightengine violence: prob={vio_prob:.2f} physical={vio_phys:.2f} firearm_threat={vio_firearm_threat:.2f}")
         state.violence = max(state.violence, 1.0)
     gore_prob = safe_float01(s.get("gore_prob", 0.0))
-    gore_max = max(gore_prob, _safe_float(s.get("gore_very_bloody", 0.0)), _safe_float(s.get("gore_slightly_bloody", 0.0)), _safe_float(s.get("gore_serious_injury", 0.0)), _safe_float(s.get("gore_superficial_injury", 0.0)), _safe_float(s.get("gore_corpse", 0.0)), _safe_float(s.get("gore_body_organ", 0.0)))
-    if gore_max >= env_float("SE_GORE_THRESH", 0.20):
+    gore_max = max(
+        gore_prob,
+        safe_float01(s.get("gore_very_bloody", 0.0)),
+        safe_float01(s.get("gore_slightly_bloody", 0.0)),
+        safe_float01(s.get("gore_serious_injury", 0.0)),
+        safe_float01(s.get("gore_superficial_injury", 0.0)),
+        safe_float01(s.get("gore_corpse", 0.0)),
+        safe_float01(s.get("gore_body_organ", 0.0)),
+    )
+    if gore_max >= env_float("SE_GORE_THRESH", 0.20, min_value=0.0, max_value=1.0):
         state.reasons.append(f"Sightengine gore/blood: score={gore_max:.2f} (prob={gore_prob:.2f})")
         state.violence = max(state.violence, 1.0)
     offensive_max = safe_float01(s.get("offensive_max", 0.0))
-    if offensive_max >= env_float("SE_OFFENSIVE_THRESH", 0.50):
+    if offensive_max >= env_float("SE_OFFENSIVE_THRESH", 0.50, min_value=0.0, max_value=1.0):
         state.reasons.append(f"Sightengine offensive symbols: score={offensive_max:.2f}")
         state.hate = max(state.hate, 1.0)
     knife = safe_float01(s.get("weapon_knife", 0.0))
     knife_ctx = max(vio_prob, vio_phys, vio_firearm_threat, gore_max)
-    if knife >= env_float("SE_KNIFE_THRESH", 0.65) and (env_bool("SE_KNIFE_BLOCK_ALL", False) or knife_ctx >= env_float("SE_KNIFE_CONTEXT_THRESH", 0.25)):
+    if knife >= env_float("SE_KNIFE_THRESH", 0.65, min_value=0.0, max_value=1.0) and (
+        env_bool("SE_KNIFE_BLOCK_ALL", False)
+        or knife_ctx >= env_float("SE_KNIFE_CONTEXT_THRESH", 0.25, min_value=0.0, max_value=1.0)
+    ):
         state.reasons.append(f"Sightengine knife: score={knife:.2f} ctx={knife_ctx:.2f}")
         state.violence = max(state.violence, 1.0)
 
@@ -247,18 +250,50 @@ def _apply_openai(r: EngineResult, state: _VerdictState) -> Verdict | None:
     sexual = safe_float01(s.get("sexual", 0.0))
     violence = max(safe_float01(s.get("violence", 0.0)), safe_float01(s.get("violence/graphic", 0.0)))
     hate = max(safe_float01(s.get("hate", 0.0)), safe_float01(s.get("hate/threatening", 0.0)))
-    if minors > 0.01:
+    self_harm = max(
+        safe_float01(s.get("self-harm", 0.0)),
+        safe_float01(s.get("self-harm/intent", 0.0)),
+        safe_float01(s.get("self-harm/instructions", 0.0)),
+    )
+    harassment = max(
+        safe_float01(s.get("harassment", 0.0)),
+        safe_float01(s.get("harassment/threatening", 0.0)),
+    )
+    illicit = max(
+        safe_float01(s.get("illicit", 0.0)),
+        safe_float01(s.get("illicit/violent", 0.0)),
+    )
+    minors_threshold = env_float("OPENAI_SEXUAL_MINORS_BLOCK_THRESHOLD", 0.01, min_value=0.0, max_value=1.0)
+    if minors >= minors_threshold:
         state.reasons.append("OpenAI: sexual/minors detected")
         return Verdict(VerdictLabel.BLOCK, 1.0, 1.0, 1.0, state.reasons)
     state.bump("nudity", sexual, f"OpenAI sexual={sexual:.2f}", 0.50)
     state.bump("violence", violence, f"OpenAI violence={violence:.2f}", 0.50)
     state.bump("hate", hate, f"OpenAI hate={hate:.2f}", 0.50)
+    state.bump("violence", self_harm, f"OpenAI self-harm={self_harm:.2f}", 0.50)
+    state.bump("hate", harassment, f"OpenAI harassment={harassment:.2f}", 0.50)
+    state.bump("violence", illicit, f"OpenAI illicit={illicit:.2f}", 0.50)
+    if safe_float01(s.get("flagged", 0.0)) >= 1.0 and max(
+        sexual,
+        violence,
+        hate,
+        self_harm,
+        harassment,
+        illicit,
+    ) < env_float(
+        "FINAL_REVIEW_THRESHOLD", 0.40, min_value=0.0, max_value=1.0
+    ):
+        review_risk = env_float("FINAL_REVIEW_THRESHOLD", 0.40, min_value=0.0, max_value=1.0)
+        state.reasons.append("OpenAI flagged content outside mapped score categories")
+        state.nudity = max(state.nudity, review_risk)
+        state.violence = max(state.violence, review_risk)
+        state.hate = max(state.hate, review_risk)
     return None
 
 
 def _final_label(state: _VerdictState) -> VerdictLabel:
     block_t = get_config().final_block_threshold
-    review_t = env_float("FINAL_REVIEW_THRESHOLD", 0.40)
+    review_t = env_float("FINAL_REVIEW_THRESHOLD", 0.40, min_value=0.0, max_value=1.0)
     if state.nudity >= block_t or state.violence >= block_t or state.hate >= block_t:
         return VerdictLabel.BLOCK
     if state.nudity >= review_t or state.violence >= review_t or state.hate >= review_t:
@@ -292,6 +327,14 @@ def compute_verdict(results: List[EngineResult]) -> Verdict:
 # Runner
 # -----------------------------
 
+def _destroy_dialog_root(root: Any) -> None:
+    """Best-effort GUI cleanup that must not discard a completed selection."""
+    try:
+        root.destroy()
+    except Exception:
+        return
+
+
 def pick_file_dialog() -> Optional[str]:
     """Open a file picker if Tkinter is available."""
     try:
@@ -306,10 +349,7 @@ def pick_file_dialog() -> Optional[str]:
             )
             return path or None
         finally:
-            try:
-                root.destroy()
-            except Exception:
-                pass
+            _destroy_dialog_root(root)
     except Exception:
         return None
 

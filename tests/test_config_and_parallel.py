@@ -186,6 +186,81 @@ def test_compute_verdict_specific_rules(monkeypatch) -> None:
     assert compute_verdict([EngineResult(name="OpenAI Moderation", status="ok", scores={"sexual/minors": 0.02})]).label == VerdictLabel.BLOCK
 
 
+def test_phash_allow_does_not_override_later_block_when_short_circuit_is_disabled(monkeypatch) -> None:
+    monkeypatch.setenv("SHORT_CIRCUIT_PHASH", "0")
+    results = [
+        EngineResult(name="pHash allowlist", status="ok", scores={"phash_allow_match": 1.0}),
+        EngineResult(name="OCR text", status="ok", scores={"ocr_match": 1.0}),
+    ]
+
+    verdict = compute_verdict(results)
+
+    assert verdict.label == VerdictLabel.BLOCK
+    assert "pHash allowlist match" in verdict.reasons
+    assert "OCR text blocked" in verdict.reasons
+
+
+def test_conflicting_phash_lists_block_regardless_of_result_order() -> None:
+    allow = EngineResult(name="pHash allowlist", status="ok", scores={"phash_allow_match": 1.0})
+    block = EngineResult(name="pHash blocklist", status="ok", scores={"phash_block_match": 1.0})
+
+    assert compute_verdict([allow, block]).label == VerdictLabel.BLOCK
+    assert compute_verdict([block, allow]).label == VerdictLabel.BLOCK
+
+
+def test_openai_sexual_minors_threshold_is_inclusive(monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_SEXUAL_MINORS_BLOCK_THRESHOLD", "0.01")
+
+    verdict = compute_verdict(
+        [EngineResult(name="OpenAI Moderation", status="ok", scores={"sexual/minors": 0.01})]
+    )
+
+    assert verdict.label == VerdictLabel.BLOCK
+
+
+def test_openai_flagged_unmapped_category_requires_review(monkeypatch) -> None:
+    monkeypatch.setenv("FINAL_BLOCK_THRESHOLD", "0.85")
+    monkeypatch.setenv("FINAL_REVIEW_THRESHOLD", "0.40")
+    get_config(reload=True)
+
+    verdict = compute_verdict(
+        [EngineResult(name="OpenAI Moderation", status="ok", scores={"flagged": 1.0})]
+    )
+
+    assert verdict.label == VerdictLabel.REVIEW
+    assert "outside mapped score categories" in verdict.reasons[0]
+
+
+def test_openai_high_self_harm_score_can_block(monkeypatch) -> None:
+    monkeypatch.setenv("FINAL_BLOCK_THRESHOLD", "0.85")
+    get_config(reload=True)
+
+    verdict = compute_verdict(
+        [EngineResult(name="OpenAI Moderation", status="ok", scores={"self-harm/intent": 0.90})]
+    )
+
+    assert verdict.label == VerdictLabel.BLOCK
+    assert verdict.violence_risk == 0.90
+    assert "OpenAI self-harm=0.90" in verdict.reasons
+
+
+def test_openai_harassment_and_illicit_scores_affect_verdict(monkeypatch) -> None:
+    monkeypatch.setenv("FINAL_BLOCK_THRESHOLD", "0.85")
+    get_config(reload=True)
+
+    harassment = compute_verdict(
+        [EngineResult(name="OpenAI Moderation", status="ok", scores={"harassment/threatening": 0.60})]
+    )
+    illicit = compute_verdict(
+        [EngineResult(name="OpenAI Moderation", status="ok", scores={"illicit/violent": 0.60})]
+    )
+
+    assert harassment.label == VerdictLabel.REVIEW
+    assert harassment.hate_risk == 0.60
+    assert illicit.label == VerdictLabel.REVIEW
+    assert illicit.violence_risk == 0.60
+
+
 def test_dotenv_example_is_not_loaded_as_runtime_defaults(monkeypatch) -> None:
     from pathlib import Path
 
@@ -202,6 +277,34 @@ def test_dotenv_example_is_not_loaded_as_runtime_defaults(monkeypatch) -> None:
     assert "FORBIDDEN_SYMBOLS_YOLO_CONF" not in keys
     assert config_mod.os.environ["FORBIDDEN_SYMBOLS_YOLO_CONF"] == "sentinel-from-test"
     assert config_mod.get_config(reload=True).sample_frames == 12
+
+
+def test_cli_dotenv_search_can_use_cwd_without_changing_import_default(monkeypatch, tmp_path) -> None:
+    from modimg import config as config_mod
+
+    package_root = tmp_path / "installed"
+    package_file = package_root / "modimg" / "config.py"
+    package_file.parent.mkdir(parents=True)
+    package_file.touch()
+    cwd = tmp_path / "working-directory"
+    cwd.mkdir()
+    (cwd / ".env").write_text("MODIMG_TEST_CWD_DOTENV=loaded\n", encoding="utf-8")
+    (cwd / ".env.example").write_text("MODIMG_TEST_EXAMPLE=must-not-load\n", encoding="utf-8")
+
+    monkeypatch.chdir(cwd)
+    monkeypatch.setattr(config_mod, "__file__", str(package_file))
+    monkeypatch.delenv("MODIMG_TEST_CWD_DOTENV", raising=False)
+    monkeypatch.delenv("MODIMG_TEST_EXAMPLE", raising=False)
+
+    import_path, import_keys = config_mod.load_dotenv_candidates()
+    cli_path, cli_keys = config_mod.load_dotenv_candidates(include_cwd=True)
+
+    assert import_path is None
+    assert import_keys == []
+    assert cli_path == str(cwd / ".env")
+    assert cli_keys == ["MODIMG_TEST_CWD_DOTENV"]
+    assert config_mod.os.environ["MODIMG_TEST_CWD_DOTENV"] == "loaded"
+    assert "MODIMG_TEST_EXAMPLE" not in config_mod.os.environ
 
 
 def test_json_safe_handles_paths_numpy_and_non_finite_values(tmp_path) -> None:

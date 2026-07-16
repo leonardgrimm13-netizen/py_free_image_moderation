@@ -2,23 +2,26 @@ from __future__ import annotations
 
 import os
 import re
+import threading
 from typing import List, Tuple
 
 
 from ..enums import EngineStatus
+from ..resources import resolve_bundled_resource_path, resolve_resource_path
 from ..types import Engine, EngineResult, Frame
-from ..utils import env_bool, env_int, now_ms
-from ..config import project_root
+from ..utils import env_bool, env_int, now_ms, redact_sensitive_text
 
 class OCREngine(Engine):
     name = "OCR text"
 
-    # Cache compiled patterns per process to reduce CPU.
-    _CACHE: tuple[float, List[re.Pattern]] = (0.0, [])
+    # Cache compiled patterns by file so custom per-instance blocklists cannot collide.
+    _CACHE: dict[str, tuple[tuple[int, int], List[re.Pattern]]] = {}
+    _CACHE_LOCK = threading.RLock()
+    _TESSERACT_CONFIG_LOCK = threading.RLock()
 
     def __init__(self) -> None:
         super().__init__()
-        self.blocklist_path = os.path.join(project_root(), "data", "ocr_text_blocklist.txt")
+        self.blocklist_path = str(resolve_bundled_resource_path(os.path.join("data", "ocr_text_blocklist.txt")))
 
     def available(self) -> Tuple[bool, str]:
         if not env_bool("OCR_ENABLE", False):
@@ -33,28 +36,45 @@ class OCREngine(Engine):
 
     def _load_patterns(self) -> List[re.Pattern]:
         try:
-            mtime = os.path.getmtime(self.blocklist_path)
-        except Exception:
+            stat_result = os.stat(self.blocklist_path)
+        except OSError:
             return []
-        cached_mtime, cached_pats = OCREngine._CACHE
-        if cached_pats and cached_mtime == mtime:
-            return cached_pats
+        max_bytes = max(1, env_int("OCR_BLOCKLIST_MAX_BYTES", 1_000_000))
+        if stat_result.st_size > max_bytes:
+            return []
+        signature = (stat_result.st_mtime_ns, stat_result.st_size)
+        cache_key = str(resolve_resource_path(self.blocklist_path))
+        with OCREngine._CACHE_LOCK:
+            cached = OCREngine._CACHE.get(cache_key)
+            if cached is not None and cached[0] == signature:
+                return cached[1]
 
         pats: List[re.Pattern] = []
+        max_patterns = max(1, env_int("OCR_BLOCKLIST_MAX_PATTERNS", 10_000))
+        max_pattern_chars = max(1, env_int("OCR_MAX_PATTERN_CHARS", 1_000))
         try:
-            with open(self.blocklist_path, "r", encoding="utf-8") as f:
-                for line in f:
-                    s = line.strip()
-                    if not s or s.startswith("#"):
-                        continue
-                    try:
-                        pats.append(re.compile(s, re.IGNORECASE))
-                    except re.error:
-                        # treat as literal
-                        pats.append(re.compile(re.escape(s), re.IGNORECASE))
-        except Exception:
+            with open(self.blocklist_path, "rb") as f:
+                raw = f.read(max_bytes + 1)
+            if len(raw) > max_bytes:
+                return []
+            for line in raw.decode("utf-8").splitlines():
+                s = line.strip()
+                if not s or s.startswith("#"):
+                    continue
+                is_regex = s.lower().startswith("re:")
+                pattern_text = s[3:] if is_regex else re.escape(s)
+                if not pattern_text or len(pattern_text) > max_pattern_chars:
+                    continue
+                try:
+                    pats.append(re.compile(pattern_text, re.IGNORECASE))
+                except re.error:
+                    pats.append(re.compile(re.escape(s[3:] if is_regex else s), re.IGNORECASE))
+                if len(pats) >= max_patterns:
+                    break
+        except (OSError, UnicodeError):
             pats = []
-        OCREngine._CACHE = (mtime, pats)
+        with OCREngine._CACHE_LOCK:
+            OCREngine._CACHE[cache_key] = (signature, pats)
         return pats
 
     def run(self, path: str, frames: List[Frame], max_api_frames: int = 3) -> EngineResult:
@@ -64,10 +84,8 @@ class OCREngine(Engine):
             return EngineResult(name=self.name, status=EngineStatus.SKIPPED, error=why, took_ms=now_ms()-start)
 
         import pytesseract
-        # optional custom tesseract path
+        # Optional custom tesseract path. pytesseract stores it in module-global state.
         tess = os.getenv("TESSERACT_CMD", "").strip()
-        if tess:
-            pytesseract.pytesseract.tesseract_cmd = tess
 
         lang = os.getenv("OCR_LANG", "eng").strip() or "eng"
         max_frames = env_int("OCR_MAX_FRAMES", 2)
@@ -82,9 +100,16 @@ class OCREngine(Engine):
         errors: List[str] = []
         for fr in use:
             try:
-                txt = pytesseract.image_to_string(fr.pil, lang=lang) or ""
+                with OCREngine._TESSERACT_CONFIG_LOCK:
+                    original_tesseract_cmd = pytesseract.pytesseract.tesseract_cmd
+                    try:
+                        if tess:
+                            pytesseract.pytesseract.tesseract_cmd = tess
+                        txt = pytesseract.image_to_string(fr.pil, lang=lang) or ""
+                    finally:
+                        pytesseract.pytesseract.tesseract_cmd = original_tesseract_cmd
             except Exception as exc:
-                msg = f"{type(exc).__name__}: {exc}"
+                msg = redact_sensitive_text(f"{type(exc).__name__}: {exc}")
                 errors.append(msg)
                 if "tesseract" in msg.lower():
                     return EngineResult(name=self.name, status=EngineStatus.SKIPPED, error=f"tesseract unavailable: {msg}", took_ms=now_ms()-start)
@@ -95,7 +120,8 @@ class OCREngine(Engine):
         if errors and not text_all:
             return EngineResult(name=self.name, status=EngineStatus.ERROR, error=f"ocr failed: {errors[0]}", took_ms=now_ms()-start)
 
-        joined = "\n".join(text_all).strip()
+        max_text_chars = max(1, env_int("OCR_MAX_TEXT_CHARS", 20_000))
+        joined = "\n".join(text_all).strip()[:max_text_chars]
         if len(joined) < min_len:
             return EngineResult(name=self.name, status=EngineStatus.OK, scores={"ocr_match": 0.0}, details={"text": ""}, took_ms=now_ms()-start)
 

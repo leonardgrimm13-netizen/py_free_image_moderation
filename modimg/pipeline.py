@@ -10,7 +10,16 @@ from .config import get_config
 from .enums import EngineStatus, VerdictLabel
 from .logging_utils import get_logger
 from .types import Engine, EngineResult, Verdict, Frame
-from .utils import env_bool, is_url, download_url_to_temp, status_value
+from .utils import (
+    download_url_to_temp,
+    env_bool,
+    env_float,
+    env_int,
+    is_url,
+    redact_sensitive_text,
+    redact_url,
+    status_value,
+)
 from .frames import load_frames
 from .verdict import compute_verdict
 from .phash import (
@@ -29,7 +38,9 @@ from .engines import (
     YOLOWorldWeaponsEngine,
     YOLOForbiddenSymbolsEngine,
     OpenAIModerationEngine,
+    OpenAIRunState,
     SightengineEngine,
+    SightengineRunState,
 )
 
 LOGGER = get_logger("pipeline")
@@ -43,18 +54,32 @@ def build_local_engines(*, no_apis: bool = False) -> List[Engine]:
     return [OCREngine(), NudeNetEngine(), OpenNSFW2Engine(), YOLOWorldWeaponsEngine(), YOLOForbiddenSymbolsEngine()]
 
 
-def build_api_engines(*, no_apis: bool = False) -> List[Engine]:
+def build_api_engines(
+    *,
+    no_apis: bool = False,
+    openai_run_state: OpenAIRunState | None = None,
+    sightengine_run_state: SightengineRunState | None = None,
+) -> List[Engine]:
     engines: List[Engine] = []
     cfg = get_config()
     if (not no_apis) and (not cfg.openai_disable):
-        engines.append(OpenAIModerationEngine())
+        engines.append(OpenAIModerationEngine(run_state=openai_run_state))
     if (not no_apis) and (not cfg.sightengine_disable):
-        engines.append(SightengineEngine())
+        engines.append(SightengineEngine(run_state=sightengine_run_state))
     return engines
 
 
-def build_main_engines(*, no_apis: bool = False) -> List[Engine]:
-    return build_local_engines(no_apis=no_apis) + build_api_engines(no_apis=no_apis)
+def build_main_engines(
+    *,
+    no_apis: bool = False,
+    openai_run_state: OpenAIRunState | None = None,
+    sightengine_run_state: SightengineRunState | None = None,
+) -> List[Engine]:
+    return build_local_engines(no_apis=no_apis) + build_api_engines(
+        no_apis=no_apis,
+        openai_run_state=openai_run_state,
+        sightengine_run_state=sightengine_run_state,
+    )
 
 
 def _run_single_engine(path: str, frames: List[Frame], engine: Engine) -> EngineResult:
@@ -63,11 +88,11 @@ def _run_single_engine(path: str, frames: List[Frame], engine: Engine) -> Engine
     except Exception as exc:  # last-resort protection
         details: Dict[str, Any] = {}
         if get_config().debug:
-            details["trace"] = traceback.format_exc()[-2000:]
+            details["trace"] = redact_sensitive_text(traceback.format_exc()[-2000:])
         return EngineResult(
             name=getattr(engine, "name", "engine"),
             status=EngineStatus.ERROR,
-            error=f"{type(exc).__name__}: {exc}",
+            error=redact_sensitive_text(f"{type(exc).__name__}: {exc}"),
             details=details,
         )
 
@@ -147,26 +172,42 @@ def maybe_auto_learn(verdict: Verdict, frames: List[Frame]) -> Optional[str]:
     return None
 
 
-def run_on_input(inp: str, *, no_apis: bool = False, sample_frames: int = 12) -> Dict[str, Any]:
+def run_on_input(
+    inp: str,
+    *,
+    no_apis: bool = False,
+    sample_frames: int = 12,
+    openai_run_state: OpenAIRunState | None = None,
+    sightengine_run_state: SightengineRunState | None = None,
+) -> Dict[str, Any]:
     tmp_path: Optional[str] = None
-    display_name = inp
+    frames: List[Frame] = []
+    remote_input = is_url(inp)
+    report_path = redact_url(inp) if remote_input else inp
+    display_name = report_path
 
     try:
         try:
-            if is_url(inp):
-                tmp_path, display_name = download_url_to_temp(inp)
+            if remote_input:
+                tmp_path, display_name = download_url_to_temp(
+                    inp,
+                    max_bytes=max(1, env_int("MODIMG_MAX_DOWNLOAD_BYTES", 25_000_000)),
+                    timeout_sec=env_float("MODIMG_URL_TIMEOUT_SEC", 20.0, min_value=0.1),
+                    max_redirects=max(0, env_int("MODIMG_MAX_URL_REDIRECTS", 5)),
+                )
                 path = tmp_path
             else:
                 path = inp
 
             frames = load_frames(path, sample_frames=sample_frames)
         except Exception as e:
-            v = Verdict(VerdictLabel.REVIEW, 0.0, 0.0, 0.0, [f"loader_failure: {type(e).__name__}: {e}"])
+            error = redact_sensitive_text(f"{type(e).__name__}: {e}", extra_secrets=(inp,) if remote_input else ())
+            v = Verdict(VerdictLabel.REVIEW, 0.0, 0.0, 0.0, [f"loader_failure: {error}"])
             return {
                 "name": display_name,
-                "path": inp,
+                "path": report_path,
                 "verdict": v,
-                "results": [EngineResult(name="Loader", status=EngineStatus.ERROR, error=f"failed to load image: {type(e).__name__}: {e}")],
+                "results": [EngineResult(name="Loader", status=EngineStatus.ERROR, error=f"failed to load image: {error}")],
                 "auto_learn": "",
             }
 
@@ -184,7 +225,11 @@ def run_on_input(inp: str, *, no_apis: bool = False, sample_frames: int = 12) ->
 
             should_run_apis = False
             if (not no_apis) and cfg.api_policy != "never":
-                api_engines = build_api_engines(no_apis=no_apis)
+                api_engines = build_api_engines(
+                    no_apis=no_apis,
+                    openai_run_state=openai_run_state,
+                    sightengine_run_state=sightengine_run_state,
+                )
                 if cfg.api_policy == "always":
                     should_run_apis = len(api_engines) > 0
                 elif cfg.api_policy == "on_review":
@@ -204,7 +249,15 @@ def run_on_input(inp: str, *, no_apis: bool = False, sample_frames: int = 12) ->
                 v = local_verdict
 
         learn_msg = maybe_auto_learn(v, frames)
-        return {"name": display_name, "path": inp, "verdict": v, "results": results, "auto_learn": learn_msg}
+        return {"name": display_name, "path": report_path, "verdict": v, "results": results, "auto_learn": learn_msg}
     finally:
+        for frame in frames:
+            try:
+                frame.close()
+            except Exception as exc:
+                LOGGER.warning("failed to close decoded frame: %s", redact_sensitive_text(exc))
         if tmp_path:
-            Path(tmp_path).unlink(missing_ok=True)
+            try:
+                Path(tmp_path).unlink(missing_ok=True)
+            except OSError as exc:
+                LOGGER.warning("failed to remove downloaded temporary file: %s", redact_sensitive_text(exc))

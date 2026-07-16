@@ -22,7 +22,7 @@ Ein flexibles Python-Projekt zur **Bild- und GIF-Moderation** mit mehreren Engin
 - Kombinierbare Engines:
   - `OpenNSFW2`
   - `NudeNet`
-  - `YOLO Waffen-Erkennung` (Lokale YOLO-Erkennung für Waffen-Erkennung mit `models/weapon_detection_yolo.pt`)
+  - `YOLO Waffen-Erkennung` (lokale YOLO-Erkennung mit `models/yolov8s-oiv7.pt`)
   - `YOLO forbidden symbols` (Lokale YOLO-Erkennung für verbotene/schädliche Symbole mit `models/forbidden_symbols_yolo.pt`)
   - `OpenAI Moderation` (optional per API-Key)
   - `Sightengine` (optional per API-Credentials)
@@ -42,7 +42,8 @@ py_free_image_moderation/
 ├── requirements_all.txt    # lokale + API-Runtime
 ├── requirements_dev.txt    # Tests/Lint/Build-Tools
 ├── models/
-│   └── forbidden_symbols_yolo.pt  # gebündeltes lokales YOLO-Modell für verbotene Symbole
+│   ├── forbidden_symbols_yolo.pt  # gebündeltes lokales YOLO-Modell für verbotene Symbole
+│   └── yolov8s-oiv7.pt            # gebündeltes lokales YOLO-Modell für Waffen-Erkennung
 ├── data/
 │   ├── phash_allowlist.txt
 │   ├── phash_blocklist.txt
@@ -145,12 +146,12 @@ python -m pip install -r requirements_dev.txt
 
 Enthält die Basis-Abhängigkeiten plus `pytest`, `pytest-cov`, `ruff` und `build`.
 
-### 4) Gebündeltes lokales YOLO-Modell
-Dieses Repository enthält `models/forbidden_symbols_yolo.pt` direkt als normale Repository-Datei.
+### 4) Gebündelte lokale YOLO-Modelle
+Dieses Repository enthält `models/forbidden_symbols_yolo.pt` und `models/yolov8s-oiv7.pt` direkt als normale Repository-Dateien.
 
 Das Modell wird lokal von der Engine `YOLO forbidden symbols` geladen. Zur Laufzeit werden kein Roboflow und keine externe API verwendet. Falls die Datei fehlt, setze `FORBIDDEN_SYMBOLS_YOLO_MODEL` auf einen absoluten Pfad oder starte aus dem Projekt-Root. Falls Git-LFS nur eine Pointer-Datei statt echter Gewichte ausgecheckt hat, führe `git lfs pull` aus.
 
-Die separate Engine `YOLO-World weapons` ist optional. Standardmäßig sucht sie `.cache/ultralytics/weights/yolov8s-oiv7.pt` und meldet `SKIPPED`, wenn kein Modell vorhanden ist. Für eigene Waffen-Gewichte setze `YOLO_WEAPON_MODEL=/absoluter/oder/projektrelativer/pfad.pt` oder `YOLO_WORLD_MODEL=/absoluter/oder/projektrelativer/pfad.pt`.
+Die separate Engine `YOLO-World weapons` verwendet standardmäßig das gebündelte `models/yolov8s-oiv7.pt`. Sowohl Source-Checkouts als auch installierte Wheels lösen gebündelte Ressourcen automatisch auf. Für eigene Waffen-Gewichte setze `YOLO_WEAPON_MODEL=/absoluter/oder/projektrelativer/pfad.pt` oder `YOLO_WORLD_MODEL=/absoluter/oder/projektrelativer/pfad.pt`.
 
 ### 5) Optionale System-Abhängigkeit für OCR
 Für OCR wird in der Regel eine lokale Tesseract-Installation benötigt:
@@ -180,6 +181,13 @@ python moderate_image.py "https://example.com/image.jpg"
 ```bash
 python moderate_image.py ./images --recursive
 ```
+
+### Mehrere explizite Eingaben prüfen
+```bash
+python moderate_image.py erstes.jpg zweites.png animation.gif --no-apis
+```
+
+Wiederholte oder überlappende lokale Pfade werden einmal verarbeitet; die Reihenfolge des ersten Auftretens bleibt erhalten.
 
 ### Verzeichnis mit Datei-Parallelisierung prüfen
 ```bash
@@ -256,9 +264,11 @@ Optionale Engines dürfen fehlen; sie müssen in der Ausgabe sauber als `skipped
 ---
 
 ## 🔧 Wichtige Konfiguration (.env)
-Das Projekt lädt automatisch `.env` aus dem Projekt-Root. Beispiel:
+Bibliotheksimporte laden `.env` automatisch aus dem Quell-/Paket-Root. Die installierte CLI prüft zusätzlich zuerst das aktuelle Arbeitsverzeichnis. Dadurch kann sie eine projektlokale `.env` verwenden, ohne dass normale Importe beliebigen Arbeitsverzeichnissen vertrauen. Beispiel:
 
-Der Loader prüft `.env`, dann `.env.txt`. `.env.example` wird nicht automatisch geladen, weil diese Datei Dokumentation ist und Platzhalter-Credentials oder schwere optionale Engine-Einstellungen enthalten kann. Für beste Ergebnisse `.env.example` nach `.env` kopieren und die `.env` anpassen.
+Der Loader prüft an jedem Ort `.env`, dann `.env.txt`. `.env.example` wird nicht automatisch geladen, weil diese Datei Dokumentation ist und Platzhalter-Credentials oder schwere optionale Engine-Einstellungen enthalten kann. Für beste Ergebnisse `.env.example` nach `.env` kopieren und die `.env` anpassen.
+
+Ohne `OPENAI_CACHE_PATH` verwendet der OpenAI-Cache unter Linux `XDG_CACHE_HOME` beziehungsweise `~/.cache`, unter Windows `LOCALAPPDATA` und unter macOS `~/Library/Caches`, jeweils im Unterordner `py-free-image-moderation`. Ein expliziter absoluter Pfad wird unverändert verwendet. Aus Rückwärtskompatibilitätsgründen bleibt ein expliziter relativer `OPENAI_CACHE_PATH` relativ zum Quell-/Paket-Root.
 
 ```env
 # API-Engines
@@ -274,6 +284,16 @@ API_POLICY=always
 MODIMG_PARALLEL_ENGINES=0
 MODIMG_PARALLEL_WORKERS=4
 MODIMG_FILE_WORKERS=1
+MODIMG_MAX_FILE_WORKERS=32
+
+# Limits für nicht vertrauenswürdige Eingaben
+MODIMG_MAX_DOWNLOAD_BYTES=25000000
+MODIMG_URL_TIMEOUT_SEC=20
+MODIMG_MAX_URL_REDIRECTS=5
+MODIMG_ALLOW_PRIVATE_URLS=0
+MODIMG_MAX_IMAGE_PIXELS=64000000
+MODIMG_MAX_ANIMATION_FRAMES=5000
+MODIMG_MAX_DECODED_PIXELS=256000000
 
 # OCR
 OCR_ENABLE=1
@@ -359,7 +379,7 @@ Speed-Tradeoffs:
 - `FORBIDDEN_SYMBOLS_YOLO_BLOCK_CONF=0.90` steuert, ab wann Funde das Urteil auf `BLOCK` anheben.
 - `FORBIDDEN_SYMBOLS_YOLO_LABEL_REVIEW_CONF` und `FORBIDDEN_SYMBOLS_YOLO_LABEL_BLOCK_CONF` überschreiben Schwellen pro Label, z. B. `swastika:0.50,isis:0.75`.
 - Empfohlene Defaults: `conf=0.20`, `review=0.30`, `block=0.90`, `imgsz=960`.
-- `FORBIDDEN_SYMBOLS_YOLO_MAX_FRAMES<=0` deaktiviert die Frame-Inferenz dieser Engine und liefert ein OK-Ergebnis mit null Funden.
+- `FORBIDDEN_SYMBOLS_YOLO_MAX_FRAMES<=0` deaktiviert die Frame-Inferenz dieser Engine und liefert `skipped`; dies zählt nicht als erfolgreicher Moderationscheck.
 - Für schnellere CPU-only-Scans: Fast-Preset plus `OCR_MAX_FRAMES=1`, `YOLO_IMGSZ=416`, `YOLO_DEVICE=cpu`, `FORBIDDEN_SYMBOLS_YOLO_IMGSZ=640` und `FORBIDDEN_SYMBOLS_YOLO_DEVICE=cpu`.
 - Unzuverlässige Klassen können zur Laufzeit ignoriert werden, z. B. `FORBIDDEN_SYMBOLS_YOLO_IGNORE_LABELS=communism,antifa`.
 
@@ -371,10 +391,20 @@ Speed-Tradeoffs:
   - Allowlist-Treffer → direkt `OK`
   - Blocklist-Treffer → direkt `BLOCK`
 - Wenn pHash nicht per Short-Circuit entscheidet, laufen die lokalen Engines weiter, inklusive `YOLO forbidden symbols`.
+- Mit `SHORT_CIRCUIT_PHASH=0` wird ein Allowlist-Treffer nur als Kontext erfasst und kann einen späteren Blocklist-, OCR-, Local-Engine- oder API-Block nicht überschreiben.
 - Die YOLO-Engine für verbotene Symbole trägt zum Hate/Policy-Risiko bei: ab dem Block-Schwellenwert sollte das Ergebnis `BLOCK` werden, ab dem Review-Schwellenwert `REVIEW`.
 - Erkennungslabels und Boxen werden im JSON unter `details.detections` gespeichert.
 - `verdict.py` verdichtet Signale (Nudity, Violence, Hate) zu finalem Urteil
 - Fehlerverhalten lässt sich über `ENGINE_ERROR_POLICY` steuern (`ignore`, `review`, `block`)
+
+### Sicherheitslimits für nicht vertrauenswürdige Eingaben
+- URL-Eingaben sind auf HTTP(S) beschränkt, verbieten eingebettete Zugangsdaten, validieren alle DNS-Antworten, binden die validierte Adresse an die Verbindung und prüfen jedes Redirect-Ziel erneut. Loopback-, private, link-lokale, Multicast- und sonstige nicht öffentliche Ziele werden standardmäßig abgelehnt.
+- `MODIMG_ALLOW_PRIVATE_URLS=1` deaktiviert den SSRF-Schutz für private Netze. Diese Option nur für vertrauenswürdige URLs in einem kontrollierten Netz verwenden.
+- URL-Downloads werden gestreamt und haben Gesamt-Timeout, Redirect-Limit, Byte-Limit, Formatsignaturprüfung sowie garantierte Bereinigung partieller temporärer Dateien. Query-Werte und URL-Zugangsdaten werden aus Reports und Fehlern entfernt.
+- Pillow-Decode-Limits begrenzen Dimensionen, Pixel, Animationsframes, gesampelte Frames und die Summe dekodierter Pixel. Ein ausgewählter, nicht dekodierbarer Animationsframe lässt den Loader fehlschlagen, statt still übersprungen zu werden.
+- pHash-Listen und OpenAI-Cache nutzen begrenzte Lesevorgänge und atomaren Austausch. Prozessinterne Locks serialisieren Cache-/Listen-Schreibzugriffe und Inferenz auf gecachten Modellen.
+- Gebündelte Modell-Defaults werden ausschließlich aus Quellpaket- und Installationspfaden aufgelöst; das aktuelle Arbeitsverzeichnis ist niemals ein automatischer Fallback. Explizit konfigurierte relative Ressourcenpfade werden zuerst aus dem Arbeitsverzeichnis und danach über Quellpaket- und Installations-Fallbacks aufgelöst. Jede eigene `.pt`-Datei ist als vertrauenswürdige ausführbare Modelldatei zu behandeln.
+- OCR-Blocklisten behandeln normale Zeilen als Literaltext. Bewusste reguläre Ausdrücke erhalten das Präfix `re:`.
 
 ---
 

@@ -11,10 +11,11 @@ from typing import Any, Dict, List, Tuple
 from .config import get_config, load_dotenv_candidates
 from .benchmark import collect_benchmark_item, format_benchmark_summary, summarize_benchmark
 from .enums import EngineStatus, VerdictLabel
+from .engines import OpenAIRunState, SightengineRunState
 from .logging_utils import get_logger
 from .pipeline import run_on_input
 from .types import EngineResult, Verdict
-from .utils import env_int, is_image_file, is_url, json_dumps_safe, json_safe
+from .utils import atomic_write_text, env_int, is_image_file, is_url, json_dumps_safe, json_safe, redact_sensitive_text, redact_url
 
 LOGGER = get_logger("cli")
 
@@ -79,11 +80,32 @@ def _iter_paths(p: str, recursive: bool) -> List[str]:
     return [str(path)]
 
 
+def _input_identity(value: str) -> str:
+    if is_url(value):
+        return f"url:{value}"
+    try:
+        normalized = os.path.normcase(str(Path(value).resolve(strict=False)))
+    except OSError:
+        normalized = os.path.normcase(os.path.abspath(value))
+    return f"path:{normalized}"
+
+
+def _expand_inputs(values: List[str], recursive: bool) -> List[str]:
+    inputs: List[str] = []
+    seen: set[str] = set()
+    for value in values:
+        for expanded in _iter_paths(value, recursive):
+            identity = _input_identity(expanded)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            inputs.append(expanded)
+    return inputs
+
+
 def _write_json_file(path: str, payload: Any) -> None:
     out = Path(path).expanduser()
-    if out.parent != Path("."):
-        out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json_dumps_safe(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_text(out, json_dumps_safe(payload, ensure_ascii=False, indent=2))
 
 
 def _print_report(rep: Dict[str, Any]) -> None:
@@ -137,24 +159,29 @@ def _serialize_report(rep: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _error_report(inp: str, exc: Exception) -> Dict[str, Any]:
+    safe_input = redact_url(inp) if is_url(inp) else inp
+    error = redact_sensitive_text(f"{type(exc).__name__}: {exc}", extra_secrets=(inp,) if is_url(inp) else ())
     details: Dict[str, Any] = {}
     if get_config().debug:
-        details["trace"] = traceback.format_exc()[-2000:]
+        details["trace"] = redact_sensitive_text(
+            traceback.format_exc()[-2000:],
+            extra_secrets=(inp,) if is_url(inp) else (),
+        )
     return {
-        "name": inp,
-        "path": inp,
+        "name": safe_input,
+        "path": safe_input,
         "verdict": Verdict(
             VerdictLabel.REVIEW,
             0.0,
             0.0,
             0.0,
-            [f"processing_failure: {type(exc).__name__}: {exc}"],
+            [f"processing_failure: {error}"],
         ),
         "results": [
             EngineResult(
                 name="Processor",
                 status=EngineStatus.ERROR,
-                error=f"failed to process image: {type(exc).__name__}: {exc}",
+                error=f"failed to process image: {error}",
                 details=details,
             )
         ],
@@ -169,10 +196,18 @@ def _process_input(
     no_apis: bool,
     sample_frames: int,
     benchmark_enabled: bool,
+    openai_run_state: OpenAIRunState,
+    sightengine_run_state: SightengineRunState,
 ) -> Tuple[int, Dict[str, Any], Dict[str, Any] | None]:
     file_start = time.perf_counter() if benchmark_enabled else 0.0
     try:
-        rep = run_on_input(inp, no_apis=no_apis, sample_frames=sample_frames)
+        rep = run_on_input(
+            inp,
+            no_apis=no_apis,
+            sample_frames=sample_frames,
+            openai_run_state=openai_run_state,
+            sightengine_run_state=sightengine_run_state,
+        )
     except Exception as exc:
         rep = _error_report(inp, exc)
     benchmark_item = None
@@ -183,10 +218,10 @@ def _process_input(
 
 
 def main(argv: List[str] | None = None) -> int:
-    load_dotenv_candidates()
+    load_dotenv_candidates(include_cwd=True)
     cfg = get_config(reload=True)
     ap = argparse.ArgumentParser(description="Moderate an image/GIF or folder with multiple optional engines.")
-    ap.add_argument("input", nargs="?", default="", help="Path/dir/URL to moderate")
+    ap.add_argument("input", nargs="*", help="Path(s), directory/directories, or URL(s) to moderate")
     ap.add_argument("--no-apis", action="store_true", help="Disable API engines (OpenAI/Sightengine)")
     ap.add_argument("--sample-frames", type=int, default=cfg.sample_frames, help="Max frames to sample from animated images")
     ap.add_argument("--recursive", action="store_true", help="When input is a directory, recurse")
@@ -201,12 +236,16 @@ def main(argv: List[str] | None = None) -> int:
     )
     args = ap.parse_args(argv)
     benchmark_enabled = bool(args.benchmark or args.benchmark_json)
-    file_workers = max(1, int(args.file_workers or 1))
+    file_workers = min(
+        max(1, int(args.file_workers or 1)),
+        max(1, env_int("MODIMG_MAX_FILE_WORKERS", 32)),
+    )
 
-    if not args.input:
+    raw_inputs = [str(value) for value in args.input if str(value).strip()]
+    if not raw_inputs:
         ap.error("input is required (path/dir/url)")
 
-    inputs = _iter_paths(args.input, args.recursive)
+    inputs = _expand_inputs(raw_inputs, args.recursive)
     if not inputs:
         message = "No input images found."
         LOGGER.error("%s", message)
@@ -216,6 +255,8 @@ def main(argv: List[str] | None = None) -> int:
 
     reports: List[Dict[str, Any]] = []
     benchmark_items: List[Dict[str, Any]] = []
+    openai_run_state = OpenAIRunState()
+    sightengine_run_state = SightengineRunState()
     bench_start = time.perf_counter() if benchmark_enabled else None
     processing_wall_ms: int | None = None
     if file_workers <= 1 or len(inputs) <= 1:
@@ -226,6 +267,8 @@ def main(argv: List[str] | None = None) -> int:
                 no_apis=args.no_apis,
                 sample_frames=args.sample_frames,
                 benchmark_enabled=benchmark_enabled,
+                openai_run_state=openai_run_state,
+                sightengine_run_state=sightengine_run_state,
             )
             if benchmark_item is not None:
                 benchmark_items.append(benchmark_item)
@@ -242,6 +285,8 @@ def main(argv: List[str] | None = None) -> int:
                     no_apis=args.no_apis,
                     sample_frames=args.sample_frames,
                     benchmark_enabled=benchmark_enabled,
+                    openai_run_state=openai_run_state,
+                    sightengine_run_state=sightengine_run_state,
                 ): idx
                 for idx, p in enumerate(inputs)
             }

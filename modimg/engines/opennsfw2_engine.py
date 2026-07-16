@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import math
 import os
 import subprocess
 import sys
@@ -11,7 +12,7 @@ from PIL import Image
 
 from ..enums import EngineStatus
 from ..types import Engine, EngineResult
-from ..utils import env_bool, now_ms
+from ..utils import env_bool, env_float, now_ms, redact_sensitive_text, safe_float01
 
 class OpenNSFW2Engine(Engine):
     """Offline NSFW probability via OpenNSFW2.
@@ -23,6 +24,7 @@ class OpenNSFW2Engine(Engine):
 
     _BACKEND = None  # (name, module)
     _BACKEND_LOCK = threading.RLock()
+    _INFERENCE_LOCK = threading.RLock()
 
     @staticmethod
     def _in_process_mode() -> str:
@@ -60,12 +62,15 @@ class OpenNSFW2Engine(Engine):
                 import opennsfw2 as n2  # type: ignore
                 OpenNSFW2Engine._BACKEND = ("opennsfw2", n2)
                 return OpenNSFW2Engine._BACKEND
-            except Exception:
-                pass
-            # Back-compat name some projects use:
-            import open_nsfw2 as n2  # type: ignore
-            OpenNSFW2Engine._BACKEND = ("open_nsfw2", n2)
-            return OpenNSFW2Engine._BACKEND
+            except Exception as preferred_error:
+                # Back-compat name some projects use. Preserve both failures in
+                # the exception chain when neither package can initialize.
+                try:
+                    import open_nsfw2 as n2  # type: ignore
+                except Exception as legacy_error:
+                    raise legacy_error from preferred_error
+                OpenNSFW2Engine._BACKEND = ("open_nsfw2", n2)
+                return OpenNSFW2Engine._BACKEND
 
     def available(self) -> Tuple[bool, str]:
         if env_bool("OPENNSFW2_DISABLE", False):
@@ -96,7 +101,14 @@ class OpenNSFW2Engine(Engine):
                 error=f"{backend_name} returned non-numeric probability: {type(exc).__name__}: {exc}",
                 took_ms=now_ms() - start,
             )
-        p = float(max(0.0, min(1.0, p)))
+        if not math.isfinite(p):
+            return EngineResult(
+                name=self.name,
+                status=EngineStatus.ERROR,
+                error=f"{backend_name} returned a non-finite probability",
+                took_ms=now_ms() - start,
+            )
+        p = safe_float01(p)
         return EngineResult(name=self.name, status=EngineStatus.OK, scores={"nsfw_probability": p}, took_ms=now_ms() - start)
 
     def _predict_in_process(self, path: str, frames: List[Any], start: int) -> EngineResult:
@@ -115,23 +127,25 @@ class OpenNSFW2Engine(Engine):
                 return getattr(x, "pil")
             return x
 
-        im = _to_pil(frames[0]).convert("RGB")
-
         prob = None
         try:
             # Official opennsfw2 API exposes predict_image/predict_images for image paths.
             if hasattr(n2, "predict_image"):
-                prob = n2.predict_image(path)
+                with OpenNSFW2Engine._INFERENCE_LOCK:
+                    prob = n2.predict_image(path)
             elif hasattr(n2, "predict_images"):
-                prob = (n2.predict_images([path]) or [0.0])[0]
+                with OpenNSFW2Engine._INFERENCE_LOCK:
+                    prob = (n2.predict_images([path]) or [0.0])[0]
             elif hasattr(n2, "predict"):
-                prob = n2.predict(im)
+                with _to_pil(frames[0]).convert("RGB") as im:
+                    with OpenNSFW2Engine._INFERENCE_LOCK:
+                        prob = n2.predict(im)
         except Exception as e:
             status = EngineStatus.SKIPPED if self._is_missing_backend_error(e) else EngineStatus.ERROR
             return EngineResult(
                 name=self.name,
                 status=status,
-                error=f"{backend_name} prediction failed: {type(e).__name__}: {e}",
+                error=redact_sensitive_text(f"{backend_name} prediction failed: {type(e).__name__}: {e}"),
                 took_ms=now_ms() - start,
             )
 
@@ -168,11 +182,10 @@ except Exception as exc:
     print(json.dumps({"ok": False, "error_type": type(exc).__name__, "error": str(exc)}))
     raise SystemExit(2)
 """
-        try:
-            timeout = max(1.0, float(os.getenv("OPENNSFW2_TIMEOUT_SEC", "120")))
-        except Exception:
-            timeout = 120.0
+        timeout = env_float("OPENNSFW2_TIMEOUT_SEC", 120.0, min_value=1.0)
         env = os.environ.copy()
+        for secret_name in ("OPENAI_API_KEY", "SIGHTENGINE_USER", "SIGHTENGINE_SECRET"):
+            env.pop(secret_name, None)
         env.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
         env.setdefault("CUDA_VISIBLE_DEVICES", "-1")
         try:
@@ -197,7 +210,7 @@ except Exception as exc:
             return EngineResult(
                 name=self.name,
                 status=EngineStatus.ERROR,
-                error=f"opennsfw2 subprocess failed: {type(exc).__name__}: {exc}",
+                error=redact_sensitive_text(f"opennsfw2 subprocess failed: {type(exc).__name__}: {exc}"),
                 took_ms=now_ms() - start,
             )
 
@@ -214,7 +227,7 @@ except Exception as exc:
         if proc.returncode == 0 and isinstance(payload, dict) and payload.get("ok") is True:
             return self._result_from_probability(payload.get("probability"), str(payload.get("backend") or "opennsfw2"), start)
 
-        stderr_tail = (proc.stderr or "").strip()[-1200:]
+        stderr_tail = redact_sensitive_text((proc.stderr or "").strip()[-1200:])
         if proc.returncode < 0:
             return EngineResult(
                 name=self.name,
@@ -224,7 +237,7 @@ except Exception as exc:
             )
         if isinstance(payload, dict):
             err_type = str(payload.get("error_type") or "Error")
-            err_msg = str(payload.get("error") or "")
+            err_msg = redact_sensitive_text(payload.get("error") or "")
             probe_exc = ModuleNotFoundError(err_msg) if "no module named" in err_msg.lower() else RuntimeError(err_msg)
             status = EngineStatus.SKIPPED if err_type in {"ImportError", "ModuleNotFoundError"} or self._is_missing_backend_error(probe_exc) else EngineStatus.ERROR
             return EngineResult(
