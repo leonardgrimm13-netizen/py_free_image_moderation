@@ -1,4 +1,3 @@
-[README.de.md](https://github.com/user-attachments/files/30100764/README.de.md)
 # py_free_image_moderation
 Ein flexibles Python-Projekt zur **Bild- und GIF-Moderation** mit mehreren Engines (lokal + API), pHash-Listen und klarer CLI-Ausgabe.
 
