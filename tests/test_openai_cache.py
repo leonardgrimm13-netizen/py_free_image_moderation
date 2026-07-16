@@ -348,26 +348,22 @@ def test_openai_default_cache_path_uses_platform_user_cache(
     monkeypatch.delenv("OPENAI_CACHE_PATH", raising=False)
     monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
     monkeypatch.delenv("LOCALAPPDATA", raising=False)
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.setattr(openai_mod.sys, "platform", platform)
     for key, relative in environment.items():
         monkeypatch.setenv(key, str(tmp_path / relative))
 
     expected = tmp_path.joinpath(*relative_root, "py-free-image-moderation", "openai_moderation_cache.json")
 
-    assert OpenAIModerationEngine()._cache_path() == str(expected)
+    assert openai_mod._default_user_cache_path(platform=platform, home=tmp_path / "home") == expected
 
 
 def test_openai_default_cache_path_uses_home_when_xdg_is_unset(monkeypatch, tmp_path) -> None:
     _reset_cache_state()
     monkeypatch.delenv("OPENAI_CACHE_PATH", raising=False)
     monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.setattr(openai_mod.sys, "platform", "linux")
 
     expected = tmp_path / "home" / ".cache" / "py-free-image-moderation" / "openai_moderation_cache.json"
 
-    assert OpenAIModerationEngine()._cache_path() == str(expected)
+    assert openai_mod._default_user_cache_path(platform="linux", home=tmp_path / "home") == expected
 
 
 def test_openai_explicit_relative_cache_path_keeps_project_root_semantics(monkeypatch, tmp_path) -> None:

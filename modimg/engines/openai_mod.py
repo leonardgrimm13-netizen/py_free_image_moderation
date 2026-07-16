@@ -70,18 +70,19 @@ class OpenAIRunState:
                 self._disabled_reason = reason
 
 
-def _default_user_cache_path() -> Path:
+def _default_user_cache_path(*, platform: Optional[str] = None, home: Optional[Path] = None) -> Path:
     """Return a per-user cache path without requiring a platform helper dependency."""
-    home = Path.home()
-    if sys.platform.startswith("win"):
+    runtime_platform = sys.platform if platform is None else platform
+    home_path = Path.home() if home is None else home
+    if runtime_platform.startswith("win"):
         configured = (os.getenv("LOCALAPPDATA") or "").strip()
-        base = Path(configured).expanduser() if configured else home / "AppData" / "Local"
-    elif sys.platform == "darwin":
-        base = home / "Library" / "Caches"
+        base = Path(configured).expanduser() if configured else home_path / "AppData" / "Local"
+    elif runtime_platform == "darwin":
+        base = home_path / "Library" / "Caches"
     else:
         configured = (os.getenv("XDG_CACHE_HOME") or "").strip()
         xdg_path = Path(configured).expanduser() if configured else None
-        base = xdg_path if xdg_path is not None and xdg_path.is_absolute() else home / ".cache"
+        base = xdg_path if xdg_path is not None and xdg_path.is_absolute() else home_path / ".cache"
     return base / "py-free-image-moderation" / "openai_moderation_cache.json"
 
 
@@ -183,7 +184,7 @@ class OpenAIModerationEngine(Engine):
             # Preserve the historical project-root semantics for explicit
             # relative OPENAI_CACHE_PATH values.
             if not os.path.isabs(raw):
-                raw = os.path.join(project_root(), raw)
+                raw = str(Path(project_root()) / raw)
         else:
             raw = str(_default_user_cache_path())
         with OpenAIModerationEngine._CACHE_LOCK:
