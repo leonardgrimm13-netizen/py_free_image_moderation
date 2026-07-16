@@ -1,4 +1,3 @@
-[Uploading README.md…]()
 # py_free_image_moderation
 A flexible Python project for **image and GIF moderation** with multiple engines (local + API), pHash lists, and clear CLI output.
 
