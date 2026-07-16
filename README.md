@@ -1,4 +1,4 @@
-[README.md](https://github.com/user-attachments/files/30100607/README.md)
+[Uploading README.md…]()
 # py_free_image_moderation
 A flexible Python project for **image and GIF moderation** with multiple engines (local + API), pHash lists, and clear CLI output.
 
@@ -16,7 +16,7 @@ A flexible Python project for **image and GIF moderation** with multiple engines
 
 ---
 
-<a id="features"></a>
+<a name="features"></a>
 ## ✨ Features
 - **Multi-stage moderation** for single images, GIFs, directories, and URLs
 - **pHash allowlist/blocklist** for very fast short-circuit decisions; pHash auto-learning is off by default to avoid learning false positives
@@ -34,7 +34,7 @@ A flexible Python project for **image and GIF moderation** with multiple engines
 
 ---
 
-<a id="project-structure"></a>
+<a name="project-structure"></a>
 ## 📁 Project structure
 ```text
 py_free_image_moderation/
@@ -63,7 +63,7 @@ py_free_image_moderation/
 
 ---
 
-<a id="installation"></a>
+<a name="installation"></a>
 ## ⚙️ Installation
 > Recommended and supported for this project: Python **3.11 or 3.12** in a virtual environment.
 >
@@ -164,7 +164,7 @@ For OCR you typically need a local Tesseract install:
 
 ---
 
-<a id="quickstart"></a>
+<a name="quickstart"></a>
 ## 🚀 Quickstart
 
 ### Check a single image
@@ -235,7 +235,7 @@ Benchmark JSON field `total_wall_ms` includes only wall-clock time spent process
 
 ---
 
-<a id="verification"></a>
+<a name="verification"></a>
 ## ✅ Verification
 Core install:
 ```bash
@@ -269,7 +269,7 @@ Optional engines may be missing; they must show up as `skipped`/`disabled` in ou
 
 ---
 
-<a id="important-configuration-env"></a>
+<a name="important-configuration-env"></a>
 ## 🔧 Important configuration (.env)
 Library imports automatically load `.env` from the source/package root. The installed CLI additionally checks the current working directory first, which allows a project-local `.env` without making ordinary imports trust arbitrary working directories. Example:
 
@@ -391,7 +391,7 @@ Speed tradeoffs:
 
 ---
 
-<a id="result-logic-ok--review--block"></a>
+<a name="result-logic-ok--review--block"></a>
 ## 🧠 Result logic (OK / REVIEW / BLOCK)
 - **Staged pipeline:** `pHash` → local engines → optional API engines → final verdict
 - **pHash short-circuit** can decide early:
@@ -415,7 +415,7 @@ Speed tradeoffs:
 
 ---
 
-<a id="tips-for-running"></a>
+<a name="tips-for-running"></a>
 ## 🛠️ Tips for running
 - Start with `--no-apis` to verify the local pipeline and performance first.
 - Use `--json` if results should be processed in CI/CD or backend services.
