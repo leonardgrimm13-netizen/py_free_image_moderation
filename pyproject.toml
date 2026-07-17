@@ -5,15 +5,17 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "py-free-image-moderation"
 version = "0.1.2"
-description = "Flexible image/GIF moderation pipeline with optional local and API engines"
+description = "Flexible image, GIF, SVG, and AVIF moderation pipeline with optional local and API engines"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
 authors = [{ name = "py_free_image_moderation maintainers" }]
 license = "LicenseRef-Proprietary"
 dependencies = [
-  "Pillow>=10.0.0",
+  "Pillow>=11.3.0",
   "numpy>=1.26.0,<2.3",
   "ImageHash>=4.3.1",
+  "resvg_py>=0.3,<1.0",
+  "defusedxml>=0.7.1,<1.0",
 ]
 
 [project.optional-dependencies]

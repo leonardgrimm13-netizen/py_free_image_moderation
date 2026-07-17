@@ -7,7 +7,7 @@ from typing import Any, List, Tuple, Optional
 from PIL import Image
 
 from ..enums import EngineStatus
-from ..types import Engine, EngineResult
+from ..types import Engine, EngineResult, Frame
 from ..utils import env_bool, now_ms, redact_sensitive_text, safe_float01
 
 class NudeNetEngine(Engine):
@@ -70,6 +70,10 @@ class NudeNetEngine(Engine):
             return x
 
         def _detect_input_for_frame(frame: Any, frame_count: int) -> str:
+            if isinstance(frame, Frame):
+                if frame_count == 1:
+                    return frame.compatible_file_path(path)
+                return frame.get_jpeg_path()
             if frame_count == 1 and path and os.path.exists(path):
                 return path
             with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
@@ -91,7 +95,7 @@ class NudeNetEngine(Engine):
                         name=self.name,
                         status=EngineStatus.ERROR,
                         error=redact_sensitive_text(f"nudenet detection failed: {type(exc).__name__}: {exc}"),
-                        details={"frame_idx": int(getattr(fr, "idx", 0)), "input": detect_input},
+                        details={"frame_idx": int(getattr(fr, "idx", 0))},
                         took_ms=now_ms() - start,
                     )
                 for d in dets:
@@ -113,7 +117,7 @@ class NudeNetEngine(Engine):
                 except FileNotFoundError:
                     continue
                 except OSError as exc:
-                    self.logger.warning("failed to remove NudeNet temporary file: %s", redact_sensitive_text(exc))
+                    self.logger.warning("failed to remove NudeNet temporary file: %s", type(exc).__name__)
 
         return EngineResult(
             name=self.name,

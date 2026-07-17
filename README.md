@@ -1,5 +1,5 @@
 # py_free_image_moderation
-A flexible Python project for **image and GIF moderation** with multiple engines (local + API), pHash lists, and clear CLI output.
+A flexible Python project for **image, GIF, SVG, and AVIF moderation** with multiple engines (local + API), pHash lists, and clear CLI output.
 
 **Languages:** **English** | [German](README.de.md)
 
@@ -8,6 +8,8 @@ A flexible Python project for **image and GIF moderation** with multiple engines
 - [Project structure](#project-structure)
 - [Installation](#installation)
 - [Quickstart](#quickstart)
+- [Native AVIF processing](#native-avif-processing)
+- [Secure SVG preprocessing](#secure-svg-preprocessing)
 - [Verification](#verification)
 - [Important configuration (.env)](#important-configuration-env)
 - [Result logic (OK / REVIEW / BLOCK)](#result-logic-ok--review--block)
@@ -17,7 +19,9 @@ A flexible Python project for **image and GIF moderation** with multiple engines
 
 <a name="features"></a>
 ## ✨ Features
-- **Multi-stage moderation** for single images, GIFs, directories, and URLs
+- **Multi-stage moderation** for raster images, GIFs, SVGs, AVIF files, directories, and URLs
+- **Native AVIF decoding** with Pillow, content-based `avif`/`avis` detection, bounded sequence sampling, and lazy compatibility files only for path-based engines
+- **Secure SVG preprocessing** with `defusedxml` validation and bounded `resvg_py` SVG-to-PNG rasterization before any engine runs
 - **pHash allowlist/blocklist** for very fast short-circuit decisions; pHash auto-learning is off by default to avoid learning false positives
 - **OCR text check** (e.g., against text blocklists)
 - Combinable engines:
@@ -53,8 +57,10 @@ py_free_image_moderation/
 └── modimg/
     ├── cli.py               # Args, output, JSON export
     ├── pipeline.py          # Flow & engine orchestration
+    ├── preprocessing.py     # Input normalization before decoding/inference
+    ├── svg.py               # Secure validation and bounded PNG rasterization
     ├── verdict.py           # Final decision logic
-    ├── frames.py            # Image/GIF frame loading
+    ├── frames.py            # Raster/GIF/WebP/AVIF frame loading
     ├── phash.py             # pHash utilities
     ├── config.py            # .env loading
     └── engines/             # Individual moderation engines
@@ -97,11 +103,13 @@ python -m pip install -r requirements.txt
 ```
 
 Includes only the lightweight core dependencies:
-- `Pillow`
+- `Pillow>=11.3.0` (including native AVIF decoding)
 - `numpy`
 - `ImageHash`
+- `resvg_py>=0.3,<1.0` (SVG-to-PNG renderer)
+- `defusedxml>=0.7.1,<1.0` (secure XML pre-validation)
 
-This is enough for image loading, GIF frame sampling, pHash allow/block lists, JSON output, and graceful skipping of optional engines.
+This is enough for raster and AVIF loading, GIF/WebP/AVIF frame sampling, secure SVG preprocessing, pHash allow/block lists, JSON output, and graceful skipping of optional engines. AVIF decoding requires Pillow 11.3.0 or newer with its AVIF codec enabled; SVG support is also part of the core installation, not an optional extra.
 
 #### B) Local/Vision
 ```bash
@@ -176,9 +184,30 @@ python moderate_image.py /path/to/image.jpg
 python moderate_image.py /path/to/file.gif --sample-frames 12
 ```
 
-### Check a URL
+### Check a local SVG
+```bash
+python moderate_image.py /path/to/artwork.svg --no-apis
+python -m modimg.cli /path/to/artwork.svg --no-apis
+moderate-image /path/to/artwork.svg --no-apis
+```
+
+Uppercase `.SVG` files and valid SVG content without a file extension are also discovered by content. An `.svg` suffix alone never makes malformed or non-SVG XML valid.
+
+### Check a local AVIF
+```bash
+python moderate_image.py /path/to/photo.avif --no-apis
+python -m modimg.cli /path/to/photo.AVIF --no-apis
+moderate-image /path/to/extensionless-avif --no-apis
+```
+
+`.avif` matching is case-insensitive, so `.AVIF` and mixed-case variants work. A valid extensionless AVIF, or an AVIF stored under an unrelated suffix, is recognized from its ISO-BMFF `ftyp` contents rather than trusted from the name alone.
+
+### Check an image, SVG, or AVIF URL
 ```bash
 python moderate_image.py "https://example.com/image.jpg"
+python moderate_image.py "https://example.com/artwork.svg" --no-apis
+python moderate_image.py "https://example.com/photo.avif" --no-apis
+python moderate_image.py "https://example.com/image?id=42" --no-apis
 ```
 
 ### Check a directory
@@ -188,7 +217,7 @@ python moderate_image.py ./images --recursive
 
 ### Check multiple explicit inputs
 ```bash
-python moderate_image.py first.jpg second.png animation.gif --no-apis
+python moderate_image.py first.jpg second.png animation.gif photo.avif artwork.svg --no-apis
 ```
 
 Repeated or overlapping local paths are processed once, preserving the order of their first occurrence.
@@ -234,6 +263,74 @@ Benchmark JSON field `total_wall_ms` includes only wall-clock time spent process
 
 ---
 
+<a name="native-avif-processing"></a>
+## 🌄 Native AVIF processing
+
+AVIF is recognized from a bounded parse of the leading ISO-BMFF `ftyp` box. The declared box size, box boundaries, major brand, and compatible brands are validated; only the explicit AVIF brands `avif` and `avis` are accepted. Merely finding the text `avif`, seeing an `.avif` suffix, or receiving `Content-Type: image/avif` is not sufficient. Generic HEIF/HEIC files without an AVIF brand are not treated as AVIF.
+
+Local `.avif`, uppercase `.AVIF`, mixed-case suffixes, extensionless files, and AVIF content under an unrelated suffix are supported. Public HTTP(S) URLs are likewise accepted by content even when their path has no extension and their `Content-Type` is absent, generic, or incorrect. URL input continues to use the same DNS-pinned, redirect-validated, SSRF-protected, size-limited downloader. Invalid data advertised as AVIF is rejected, while a valid download is stored temporarily with an `.avif` suffix and removed centrally after processing.
+
+Pillow 11.3.0 or newer decodes AVIF directly into the pipeline's canonical RGB frames. AVIF is not routinely converted to PNG or JPEG. Static images and real multi-frame `avis` sequences have been tested locally; sequences use the same frame-count, sampled-frame, dimension, per-image pixel, and aggregate decoded-pixel limits as GIF and animated WebP input. Selected frames are decoded once and reused by pHash, OCR, both YOLO engines, automatic pHash learning, and all later pipeline stages.
+
+OpenAI and Sightengine continue to request JPEG bytes from each frame's existing thread-safe cache, so both can share one encoding per frame. NudeNet and OpenNSFW2 are path-based integrations that cannot be assumed to decode AVIF in every backend or subprocess mode. Only when either active engine actually asks for a compatible path does the frame lazily create a fully written temporary JPEG from its already decoded RGB pixels. The same cached bytes and per-frame path are reused across engines and concurrent calls; no AVIF re-decode or duplicate fallback encoding is needed. If neither path engine runs, no compatibility file is created.
+
+Reports retain the original local path or redacted original URL. They can record `source_format: avif`, native decoding, and whether a JPEG engine fallback was actually created, but never expose an internal path. Frame-owned compatibility files and downloaded AVIF files are removed after success, loader or engine errors, exceptions, and early returns.
+
+Pillow builds can theoretically be compiled without the AVIF codec. When AVIF content is detected in such an environment, loading fails in a controlled way with a message that Pillow 11.3.0 or newer with AVIF support is required, instead of leaking a low-level decoder or plugin exception.
+
+---
+
+<a name="secure-svg-preprocessing"></a>
+## 🛡️ Secure SVG preprocessing
+
+SVG is active XML content, so an SVG file is never passed directly to Pillow or a moderation engine. Local files and public HTTP(S) URLs use this normalization flow:
+
+```text
+original local path or URL
+    → content detection and defusedxml validation
+    → bounded resvg_py rendering (resources_dir=None)
+    → PNG signature, Pillow verify/decode, and dimension checks
+    → opaque-background RGB PNG
+    → normal frame loading and every moderation engine
+    → centralized temporary-file cleanup
+```
+
+The renderer is called through its Python API, without a shell command. It receives the validated SVG text and no user-controlled resource directory. The resulting bytes must be a decodable PNG with the expected bounded dimensions; Pillow then composites transparency onto the configured opaque background and writes a verified RGB PNG. This normalized PNG path is supplied to every engine, including engines that read a file path directly. Raster images and GIFs continue through their existing path without SVG rasterization.
+
+Detection is content-based. `.svg` and `.SVG` are directory candidates, but the suffix, URL path, and `Content-Type` are never trusted without successfully parsing the complete document and confirming an `svg` root element. Valid extensionless SVG is accepted. UTF-8 (with or without BOM) and BOM-marked UTF-16 LE/BE are supported; contradictory, malformed, or unsupported encodings are rejected. SVG URLs retain the existing HTTP(S)-only downloader, DNS pinning, redirect validation, SSRF protection, timeout, and download limit. An HTML response advertised as `image/svg+xml` is still rejected.
+
+Gzip-compressed `.svgz` input is intentionally not supported.
+
+Security policy for untrusted SVG:
+
+- `DOCTYPE`, entity declarations/expansion, external XML entities, malformed XML, `<script>`, `<foreignObject>`, `<iframe>`, `<object>`, `<embed>`, and event-handler attributes are rejected.
+- External URLs, local/relative/absolute/Windows/UNC paths, XML stylesheets, CSS `@import`, external fonts (`@font-face`), and non-fragment CSS `url(...)` references are rejected before rendering.
+- Internal fragments such as `href="#symbol"` and `url(#gradient)` remain allowed for symbols, gradients, masks, and clip paths.
+- Optional embedded raster data images are limited to valid base64 PNG, JPEG, WebP, or GIF content on `<image>`/`<feImage>` elements. MIME/content matching, per-image and aggregate byte limits, animation limits, and decoded-pixel limits apply. Nested SVG and arbitrary data URIs are rejected; set `MODIMG_SVG_ALLOW_DATA_IMAGES=0` to disable raster data images entirely.
+
+Output dimensions come from valid absolute `width`/`height`, otherwise a valid `viewBox`, otherwise the configured defaults. Physical units use a fixed 96 DPI; relative/percentage dimensions do not provide a trusted standalone size. Oversized but valid artwork is scaled down with its aspect ratio preserved. SVG-specific dimension/pixel limits and the global image/decode limits are enforced before and after rendering, and the stricter applicable value wins. URL SVG source size is also bounded by the stricter of `MODIMG_MAX_SVG_BYTES` and `MODIMG_MAX_DOWNLOAD_BYTES`.
+
+The default background is opaque white (`#ffffff`). `MODIMG_SVG_BACKGROUND` accepts an opaque Pillow-supported CSS color; invalid or transparent values produce a controlled configuration error instead of silently turning transparent regions black.
+
+Reports keep the original local path or redacted original URL. They never expose the downloaded SVG or normalized PNG temporary path. Successful SVG normalization adds JSON-compatible metadata such as:
+
+```json
+{
+  "preprocessing": {
+    "source_format": "svg",
+    "normalized_format": "png",
+    "renderer": "resvg_py",
+    "render_width": 1024,
+    "render_height": 768,
+    "background": "#ffffff"
+  }
+}
+```
+
+Downloaded sources and generated PNGs are tracked centrally and removed in reverse order after success or failure. Cleanup failures are safely logged without replacing the moderation result.
+
+---
+
 <a name="verification"></a>
 ## ✅ Verification
 Core install:
@@ -242,6 +339,8 @@ python -m pip install -r requirements.txt
 python -m compileall -q .
 python moderate_image.py --help
 python moderate_image.py path/to/test.png --no-apis
+python moderate_image.py path/to/test.svg --no-apis
+python moderate_image.py path/to/test.avif --no-apis
 python -m pip check
 ```
 
@@ -262,7 +361,7 @@ Expected behavior (short):
 - `python -m compileall -q .` → exit code `0` if code is syntactically valid.
 - `pytest -q` → exit code `0` if tests pass, otherwise non-zero.
 - `python moderate_image.py --help` → exit code `0` and shows CLI help.
-- `python moderate_image.py path/to/test.png --no-apis` → exit code `0` if the input is `OK`, or `2` if it returns `REVIEW`/`BLOCK`.
+- `python moderate_image.py path/to/test.png --no-apis` or the SVG/AVIF equivalent → exit code `0` if the input is `OK`, or `2` if it returns `REVIEW`/`BLOCK`.
 
 Optional engines may be missing; they must show up as `skipped`/`disabled` in output instead of aborting execution.
 
@@ -294,16 +393,30 @@ MODIMG_MAX_FILE_WORKERS=32
 
 # Untrusted input limits
 MODIMG_MAX_DOWNLOAD_BYTES=25000000
+MODIMG_MAX_AVIF_BYTES=100000000
 MODIMG_URL_TIMEOUT_SEC=20
 MODIMG_MAX_URL_REDIRECTS=5
 MODIMG_ALLOW_PRIVATE_URLS=0
+MODIMG_MAX_IMAGE_DIMENSION=32768
 MODIMG_MAX_IMAGE_PIXELS=64000000
 MODIMG_MAX_ANIMATION_FRAMES=5000
 MODIMG_MAX_DECODED_PIXELS=256000000
 
+# SVG preprocessing
+MODIMG_MAX_SVG_BYTES=10000000
+MODIMG_SVG_DEFAULT_WIDTH=1024
+MODIMG_SVG_DEFAULT_HEIGHT=1024
+MODIMG_SVG_MAX_RENDER_DIMENSION=4096
+MODIMG_SVG_MAX_RENDER_PIXELS=16000000
+MODIMG_SVG_BACKGROUND=#ffffff
+MODIMG_SVG_ALLOW_DATA_IMAGES=1
+MODIMG_SVG_MAX_EMBEDDED_IMAGE_BYTES=5000000
+MODIMG_SVG_MAX_TOTAL_EMBEDDED_BYTES=10000000
+
 # OCR
 OCR_ENABLE=1
 OCR_LANG=eng
+OCR_TIMEOUT_SEC=30
 
 # pHash auto-learn
 PHASH_AUTO_LEARN_ENABLE=0
@@ -342,6 +455,24 @@ FORBIDDEN_SYMBOLS_YOLO_INCLUDE_BOXES=1
 FORBIDDEN_SYMBOLS_YOLO_IGNORE_LABELS=
 ```
 
+`MODIMG_MAX_AVIF_BYTES` limits an encoded AVIF source to 100 MB by default before Pillow reads it into memory. AVIF URLs obey both this source limit and `MODIMG_MAX_DOWNLOAD_BYTES`; the stricter configured value wins.
+
+SVG defaults and limits:
+
+| Setting | Default | Purpose |
+| --- | ---: | --- |
+| `MODIMG_MAX_SVG_BYTES` | `10000000` | Maximum uncompressed SVG source size; URL input also obeys the download limit. |
+| `MODIMG_SVG_DEFAULT_WIDTH` | `1024` | Fallback width when no usable absolute size or `viewBox` exists. |
+| `MODIMG_SVG_DEFAULT_HEIGHT` | `1024` | Fallback height when no usable absolute size or `viewBox` exists. |
+| `MODIMG_SVG_MAX_RENDER_DIMENSION` | `4096` | Maximum SVG raster width or height before stricter global limits. |
+| `MODIMG_SVG_MAX_RENDER_PIXELS` | `16000000` | Maximum SVG raster pixel count before stricter global limits. |
+| `MODIMG_SVG_BACKGROUND` | `#ffffff` | Required opaque CSS background used for rendering and alpha compositing. |
+| `MODIMG_SVG_ALLOW_DATA_IMAGES` | `1` | Allows only the bounded, validated raster data images described above. |
+| `MODIMG_SVG_MAX_EMBEDDED_IMAGE_BYTES` | `5000000` | Maximum decoded bytes for each embedded raster image. |
+| `MODIMG_SVG_MAX_TOTAL_EMBEDDED_BYTES` | `10000000` | Maximum decoded bytes across all embedded raster images in one SVG. |
+
+`MODIMG_MAX_IMAGE_DIMENSION`, `MODIMG_MAX_IMAGE_PIXELS`, and `MODIMG_MAX_DECODED_PIXELS` remain hard global ceilings; increasing an SVG-specific limit cannot bypass them. Invalid numeric values use the existing safe environment-parser defaults, while an invalid or non-opaque background is reported as a controlled SVG configuration error when SVG preprocessing runs.
+
 Useful toggles:
 - Main performance knobs: `SAMPLE_FRAMES`, `API_POLICY`, `MODIMG_FILE_WORKERS`, `MODIMG_PARALLEL_ENGINES`, `MODIMG_PARALLEL_WORKERS`, `OPENNSFW2_IN_PROCESS`, `YOLO_BATCH_ENABLE`, `YOLO_IMGSZ`, `YOLO_MAX_FRAMES`, `YOLO_MAX_DET`, `FORBIDDEN_SYMBOLS_YOLO_BATCH_ENABLE`, `FORBIDDEN_SYMBOLS_YOLO_IMGSZ`, `FORBIDDEN_SYMBOLS_YOLO_MAX_FRAMES`, `OCR_MAX_FRAMES`, `PHASH_ALLOW_MAX_DISTANCE`, `PHASH_BLOCK_MAX_DISTANCE`
 - `API_POLICY=always|on_review|never` controls when API engines run
@@ -373,7 +504,7 @@ API_POLICY=on_review
 ```
 
 Speed tradeoffs:
-- Checking fewer frames can reduce accuracy on GIFs/animated images if policy-relevant content appears only in skipped frames.
+- Checking fewer frames can reduce accuracy on GIFs, animated WebP, and AVIF sequences if policy-relevant content appears only in skipped frames.
 - Too many file workers can overload GPU/VRAM, especially when both YOLO engines run on GPU.
 - Start with file workers `2` and engine workers `4`, then benchmark before increasing either value.
 
@@ -407,7 +538,7 @@ Speed tradeoffs:
 - URL input is restricted to HTTP(S), rejects embedded credentials, validates every DNS answer, pins the validated address to the connection, and revalidates every redirect. Loopback, private, link-local, multicast, and otherwise non-public targets are rejected by default.
 - `MODIMG_ALLOW_PRIVATE_URLS=1` disables the private-network SSRF guard. Use it only for trusted URLs in a controlled network.
 - URL downloads are streamed with a total timeout, redirect limit, byte limit, format signature check, and guaranteed cleanup of partial temporary files. Query values and URL credentials are removed from reports and errors.
-- Pillow decode limits cap dimensions, pixels, animation frame counts, sampled frames, and aggregate decoded pixels. A selected animation frame that cannot be decoded fails the loader instead of being silently skipped.
+- Pillow decode limits cap dimensions, pixels, animation frame counts, sampled frames, and aggregate decoded pixels, including native AVIF sequences. A selected animation frame that cannot be decoded fails the loader instead of being silently skipped.
 - pHash lists and the OpenAI cache use bounded reads and atomic replacement. In-process locks serialize cache/list writes and cached model inference.
 - Bundled model defaults are resolved only from source-package and installation roots; the current directory is never an automatic fallback. Explicitly configured relative resource paths resolve from the current directory first, followed by source-package and installation fallbacks. Treat every custom `.pt` file as trusted executable model data.
 - OCR blocklists treat ordinary lines as literal text. Prefix a deliberate regular expression with `re:`.
@@ -419,11 +550,12 @@ Speed tradeoffs:
 - Start with `--no-apis` to verify the local pipeline and performance first.
 - Use `--json` if results should be processed in CI/CD or backend services.
 - Maintain `data/phash_allowlist.txt` and `data/phash_blocklist.txt` regularly for stable decisions on recurring content.
-- For GIFs, increase `--sample-frames` if problematic content appears only in a few frames.
+- For GIFs, animated WebP, and AVIF sequences, increase `--sample-frames` if problematic content appears only in a few frames.
 
 ## Troubleshooting
 - `pip install -r requirements.txt` installs nothing or behaves oddly: check that every dependency is on its own line. A damaged requirements file with all dependencies on one line or with dependency lines accidentally commented out is invalid.
 - Unsupported Python version: use Python 3.11 or 3.12. Python 3.13+ may work for some packages, but this project does not promise it and the ML stack may reject it.
+- AVIF codec unavailable: install `Pillow>=11.3.0` using an official wheel or another build with AVIF support. Recognized AVIF input produces a controlled loader error when the active Pillow build lacks a working codec.
 - OpenNSFW2 backend missing: install `requirements_local.txt` or `.[local]`. The project intentionally uses `opennsfw2[tf-keras]`; plain `opennsfw2` can import without having a usable inference backend.
 - OpenNSFW2 native crash: the default is the isolated Python subprocess (`OPENNSFW2_IN_PROCESS=0`) so TensorFlow/native crashes become a controlled engine error instead of killing the CLI. `OPENNSFW2_IN_PROCESS=1` is faster but less robust because native TensorFlow crashes can terminate the whole process. `OPENNSFW2_IN_PROCESS=auto` tries in-process first and falls back once on normal Python exceptions, but cannot recover from native process crashes.
 - TensorFlow/Keras compatibility: keep the local install in a fresh Python 3.11/3.12 venv. If you previously installed Keras/TensorFlow packages manually, recreate the venv and reinstall `requirements_local.txt`.

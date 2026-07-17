@@ -1,5 +1,8 @@
-# Core runtime dependencies for image/GIF loading, pHash, JSON output,
-# URL loading via the Python standard library, and graceful skipping of optional engines.
-Pillow>=10.0.0
+# Core runtime dependencies for image/GIF/SVG/AVIF loading, pHash, JSON output,
+# secure SVG rasterization, URL loading via the Python standard library,
+# and graceful skipping of optional engines.
+Pillow>=11.3.0
 numpy>=1.26.0,<2.3
 ImageHash>=4.3.1
+resvg_py>=0.3,<1.0
+defusedxml>=0.7.1,<1.0

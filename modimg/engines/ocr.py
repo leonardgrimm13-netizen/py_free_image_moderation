@@ -9,7 +9,7 @@ from typing import List, Tuple
 from ..enums import EngineStatus
 from ..resources import resolve_bundled_resource_path, resolve_resource_path
 from ..types import Engine, EngineResult, Frame
-from ..utils import env_bool, env_int, now_ms, redact_sensitive_text
+from ..utils import env_bool, env_float, env_int, now_ms, redact_sensitive_text
 
 class OCREngine(Engine):
     name = "OCR text"
@@ -90,6 +90,7 @@ class OCREngine(Engine):
         lang = os.getenv("OCR_LANG", "eng").strip() or "eng"
         max_frames = env_int("OCR_MAX_FRAMES", 2)
         min_len = env_int("OCR_MIN_LEN", 3)
+        timeout_sec = env_float("OCR_TIMEOUT_SEC", 30.0, min_value=0.1)
 
         patterns = self._load_patterns()
         if not patterns:
@@ -105,11 +106,18 @@ class OCREngine(Engine):
                     try:
                         if tess:
                             pytesseract.pytesseract.tesseract_cmd = tess
-                        txt = pytesseract.image_to_string(fr.pil, lang=lang) or ""
+                        txt = pytesseract.image_to_string(fr.pil, lang=lang, timeout=timeout_sec) or ""
                     finally:
                         pytesseract.pytesseract.tesseract_cmd = original_tesseract_cmd
             except Exception as exc:
                 msg = redact_sensitive_text(f"{type(exc).__name__}: {exc}")
+                if "timeout" in msg.lower() or "timed out" in msg.lower():
+                    return EngineResult(
+                        name=self.name,
+                        status=EngineStatus.ERROR,
+                        error=f"ocr timed out: {msg}",
+                        took_ms=now_ms() - start,
+                    )
                 errors.append(msg)
                 if "tesseract" in msg.lower():
                     return EngineResult(name=self.name, status=EngineStatus.SKIPPED, error=f"tesseract unavailable: {msg}", took_ms=now_ms()-start)

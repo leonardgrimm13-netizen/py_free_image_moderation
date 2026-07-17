@@ -138,24 +138,25 @@ def _print_report(rep: Dict[str, Any]) -> None:
 
 
 def _serialize_report(rep: Dict[str, Any]) -> Dict[str, Any]:
-    return json_safe(
-        {
-            "name": rep["name"],
-            "path": rep["path"],
-            "verdict": {
-                **rep["verdict"].__dict__,
-                "label": _enum_value(rep["verdict"].label),
-            },
-            "results": [
-                {
-                    **r.__dict__,
-                    "status": _enum_value(r.status),
-                }
-                for r in rep["results"]
-            ],
-            "auto_learn": rep.get("auto_learn"),
-        }
-    )
+    payload = {
+        "name": rep["name"],
+        "path": rep["path"],
+        "verdict": {
+            **rep["verdict"].__dict__,
+            "label": _enum_value(rep["verdict"].label),
+        },
+        "results": [
+            {
+                **r.__dict__,
+                "status": _enum_value(r.status),
+            }
+            for r in rep["results"]
+        ],
+        "auto_learn": rep.get("auto_learn"),
+    }
+    if rep.get("preprocessing") is not None:
+        payload["preprocessing"] = rep["preprocessing"]
+    return json_safe(payload)
 
 
 def _error_report(inp: str, exc: Exception) -> Dict[str, Any]:
@@ -220,7 +221,7 @@ def _process_input(
 def main(argv: List[str] | None = None) -> int:
     load_dotenv_candidates(include_cwd=True)
     cfg = get_config(reload=True)
-    ap = argparse.ArgumentParser(description="Moderate an image/GIF or folder with multiple optional engines.")
+    ap = argparse.ArgumentParser(description="Moderate images, GIFs, SVGs, and AVIF files with multiple optional engines.")
     ap.add_argument("input", nargs="*", help="Path(s), directory/directories, or URL(s) to moderate")
     ap.add_argument("--no-apis", action="store_true", help="Disable API engines (OpenAI/Sightengine)")
     ap.add_argument("--sample-frames", type=int, default=cfg.sample_frames, help="Max frames to sample from animated images")
@@ -247,7 +248,7 @@ def main(argv: List[str] | None = None) -> int:
 
     inputs = _expand_inputs(raw_inputs, args.recursive)
     if not inputs:
-        message = "No input images found."
+        message = "No supported image, GIF, SVG, or AVIF files found."
         LOGGER.error("%s", message)
         if args.json_out:
             _write_json_file(args.json_out, {"error": message, "results": []})

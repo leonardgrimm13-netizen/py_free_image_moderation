@@ -78,6 +78,7 @@ jobs:
       OPENNSFW2_DISABLE: "1"
       NUDENET_DISABLE: "1"
       FORBIDDEN_SYMBOLS_YOLO_ENABLE: "0"
+      YOLO_BACKEND: "disabled"
       API_POLICY: "never"
       NO_CHECKS_POLICY: "review"
 

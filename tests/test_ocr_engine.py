@@ -101,3 +101,29 @@ def test_ocr_restores_tesseract_command_before_releasing_lock(monkeypatch, tmp_p
     assert result.status == EngineStatus.ERROR
     assert config.tesseract_cmd == "original-command"
     assert lock.entered is False
+
+
+def test_ocr_passes_bounded_timeout_and_reports_timeout_as_error(monkeypatch, tmp_path) -> None:
+    blocklist = tmp_path / "ocr.txt"
+    blocklist.write_text("blocked\n", encoding="utf-8")
+    observed_timeouts: list[float] = []
+
+    def image_to_string(*args, **kwargs):
+        observed_timeouts.append(kwargs["timeout"])
+        raise RuntimeError("Tesseract process timeout")
+
+    fake_module = types.SimpleNamespace(
+        image_to_string=image_to_string,
+        pytesseract=types.SimpleNamespace(tesseract_cmd=""),
+    )
+    monkeypatch.setitem(sys.modules, "pytesseract", fake_module)
+    monkeypatch.setenv("OCR_ENABLE", "1")
+    monkeypatch.setenv("OCR_TIMEOUT_SEC", "12.5")
+    engine = OCREngine()
+    engine.blocklist_path = str(blocklist)
+
+    result = engine.execute("dummy.png", [Frame(idx=0, pil=Image.new("RGB", (4, 4)))])
+
+    assert observed_timeouts == [12.5]
+    assert result.status == EngineStatus.ERROR
+    assert "ocr timed out" in (result.error or "")

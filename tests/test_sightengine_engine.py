@@ -19,11 +19,15 @@ class FakeResponse:
         self.text = text
         self.headers = headers or {"content-type": "application/json"}
         self._data = data
+        self.closed = False
 
     def json(self):
         if isinstance(self._data, Exception):
             raise self._data
         return self._data
+
+    def close(self) -> None:
+        self.closed = True
 
 
 def _frame() -> list[Frame]:
@@ -44,25 +48,29 @@ def test_sightengine_disable_flag_short_circuits_credentials(monkeypatch) -> Non
 def test_sightengine_invalid_json_returns_error(monkeypatch) -> None:
     monkeypatch.setenv("SIGHTENGINE_USER", "user")
     monkeypatch.setenv("SIGHTENGINE_SECRET", "secret")
-    fake_requests = types.SimpleNamespace(post=lambda *a, **k: FakeResponse(200, data=ValueError("bad json")))
+    response = FakeResponse(200, data=ValueError("bad json"))
+    fake_requests = types.SimpleNamespace(post=lambda *a, **k: response)
     monkeypatch.setitem(sys.modules, "requests", fake_requests)
 
     result = SightengineEngine().run("dummy.png", _frame())
 
     assert result.status == EngineStatus.ERROR
     assert "invalid JSON response" in (result.error or "")
+    assert response.closed is True
 
 
 def test_sightengine_http_error_returns_error(monkeypatch) -> None:
     monkeypatch.setenv("SIGHTENGINE_USER", "user")
     monkeypatch.setenv("SIGHTENGINE_SECRET", "secret")
-    fake_requests = types.SimpleNamespace(post=lambda *a, **k: FakeResponse(500, text="oops", headers={"content-type": "text/plain"}))
+    response = FakeResponse(500, text="oops", headers={"content-type": "text/plain"})
+    fake_requests = types.SimpleNamespace(post=lambda *a, **k: response)
     monkeypatch.setitem(sys.modules, "requests", fake_requests)
 
     result = SightengineEngine().run("dummy.png", _frame())
 
     assert result.status == EngineStatus.ERROR
     assert result.error == "http error 500"
+    assert response.closed is True
 
 
 def test_sightengine_request_exception_returns_error(monkeypatch) -> None:
@@ -119,16 +127,18 @@ def test_sightengine_uses_thread_local_sessions(monkeypatch) -> None:
 def test_sightengine_success_without_moderation_scores_is_error(monkeypatch) -> None:
     monkeypatch.setenv("SIGHTENGINE_USER", "user")
     monkeypatch.setenv("SIGHTENGINE_SECRET", "secret")
+    response = FakeResponse(200, data={"status": "success"})
     monkeypatch.setitem(
         sys.modules,
         "requests",
-        types.SimpleNamespace(post=lambda *args, **kwargs: FakeResponse(200, data={"status": "success"})),
+        types.SimpleNamespace(post=lambda *args, **kwargs: response),
     )
 
     result = SightengineEngine().run("dummy.png", _frame())
 
     assert result.status == EngineStatus.ERROR
     assert "no recognized moderation scores" in (result.error or "")
+    assert response.closed is True
 
 
 def test_sightengine_rejects_non_finite_only_scores(monkeypatch) -> None:
@@ -153,6 +163,7 @@ def test_sightengine_clamps_scores_to_probability_range(monkeypatch) -> None:
     assert result.status == EngineStatus.OK
     assert result.scores["nudity_raw"] == 1.0
     assert result.scores["nudity_safe"] == 0.0
+    assert response.closed is True
 
 
 def test_sightengine_request_error_redacts_credentials_and_url_query(monkeypatch) -> None:
@@ -177,10 +188,9 @@ def test_sightengine_quota_disable_is_shared_only_within_run(monkeypatch, status
     monkeypatch.setenv("SIGHTENGINE_USER", "user")
     monkeypatch.setenv("SIGHTENGINE_SECRET", "secret")
     monkeypatch.setattr(SightengineEngine, "_SESSION_LOCAL", threading.local())
-    responses = [
-        FakeResponse(status_code),
-        FakeResponse(200, data={"status": "success", "nudity": {"safe": 1.0}}),
-    ]
+    quota_response = FakeResponse(status_code)
+    success_response = FakeResponse(200, data={"status": "success", "nudity": {"safe": 1.0}})
+    responses = [quota_response, success_response]
     post_count = 0
 
     def post(*args, **kwargs):
@@ -200,3 +210,5 @@ def test_sightengine_quota_disable_is_shared_only_within_run(monkeypatch, status
     assert f"http={status_code}" in (same_run_new_instance.error or "")
     assert separate_run.status == EngineStatus.OK
     assert post_count == 2
+    assert quota_response.closed is True
+    assert success_response.closed is True

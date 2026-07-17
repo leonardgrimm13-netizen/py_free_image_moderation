@@ -18,13 +18,17 @@ def test_offline_no_apis_with_generated_image(tmp_path: Path) -> None:
             "NUDENET_DISABLE": "1",
             "OCR_ENABLE": "0",
             "FORBIDDEN_SYMBOLS_YOLO_ENABLE": "0",
+            "YOLO_BACKEND": "disabled",
             "YOLO_WEAPON_MODEL": str(tmp_path / "missing-weapons.pt"),
+            "API_POLICY": "never",
+            "NO_CHECKS_POLICY": "ok",
         }
     )
 
     proc = subprocess.run(
         [sys.executable, "moderate_image.py", str(img_path), "--no-apis"],
         check=False,
+        timeout=60,
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -33,7 +37,7 @@ def test_offline_no_apis_with_generated_image(tmp_path: Path) -> None:
     )
 
     combined = f"{proc.stdout}\n{proc.stderr}"
-    assert proc.returncode in (0, 2)
+    assert proc.returncode == 0
     assert "Traceback (most recent call last)" not in combined
     assert "FINAL:" in combined
     assert "[" in combined and "]" in combined

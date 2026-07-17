@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..enums import EngineStatus
-from ..types import Engine, EngineResult, Frame
+from ..types import Engine, EngineResult, Frame, redact_engine_output
 from ..config import project_root
 from ..utils import (
     atomic_write_text,
@@ -498,10 +498,10 @@ class OpenAIModerationEngine(Engine):
             if result.took_ms is None:
                 result.took_ms = now_ms() - start
             if result.error:
-                result.error = redact_sensitive_text(result.error)
+                result.error = redact_engine_output(result.error, frames)
             return result
         except Exception as exc:
-            error = redact_sensitive_text(f"{type(exc).__name__}: {exc}")
+            error = redact_engine_output(f"{type(exc).__name__}: {exc}", frames)
             self.logger.warning("engine failed: %s", error)
             return EngineResult(name=self.name, status=EngineStatus.ERROR, error=error, took_ms=now_ms() - start)
 

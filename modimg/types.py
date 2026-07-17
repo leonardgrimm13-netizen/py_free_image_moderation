@@ -2,7 +2,12 @@
 from __future__ import annotations
 
 import dataclasses
+import os
+import tempfile
 import threading
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -14,6 +19,38 @@ from .utils import now_ms, redact_sensitive_text
 
 
 _FRAME_LOCK_CREATION_LOCK = threading.Lock()
+_FRAME_LOGGER = get_logger("frames")
+_ENGINE_TEMPORARY_PATHS: ContextVar[tuple[str, ...]] = ContextVar(
+    "modimg_engine_temporary_paths",
+    default=(),
+)
+
+
+@contextmanager
+def engine_temporary_path_scope(paths: Iterable[str]) -> Iterator[None]:
+    """Make pipeline-owned temporary paths available to engine error sanitizing."""
+    inherited = _ENGINE_TEMPORARY_PATHS.get()
+    combined = tuple(dict.fromkeys((*inherited, *(str(path) for path in paths if path))))
+    token = _ENGINE_TEMPORARY_PATHS.set(combined)
+    try:
+        yield
+    finally:
+        _ENGINE_TEMPORARY_PATHS.reset(token)
+
+
+def redact_engine_output(value: Any, frames: List["Frame"]) -> str:
+    """Redact all known temporary paths before engine output or logging."""
+    text = redact_sensitive_text(value)
+    temporary_paths = set(_ENGINE_TEMPORARY_PATHS.get())
+    temporary_paths.update(
+        temporary_path
+        for frame in frames
+        for temporary_path in frame.temporary_file_paths()
+        if temporary_path
+    )
+    for temporary_path in sorted(temporary_paths, key=len, reverse=True):
+        text = text.replace(temporary_path, "<temporary-file>")
+    return text
 
 
 @dataclass
@@ -23,6 +60,8 @@ class Frame:
     idx: int
     pil: Image.Image
     _jpeg_bytes: Optional[bytes] = None
+    source_format: str = ""
+    _jpeg_path: Optional[str] = dataclasses.field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._cache_lock = threading.RLock()
@@ -40,7 +79,7 @@ class Frame:
             return lock
 
     def get_jpeg_bytes(self) -> bytes:
-        """Return cached JPEG bytes for API-based engines."""
+        """Return cached JPEG bytes shared by API and legacy path engines."""
         with self.cache_lock():
             if self._jpeg_bytes is None:
                 from .utils import pil_to_jpeg_bytes
@@ -48,10 +87,64 @@ class Frame:
                 self._jpeg_bytes = pil_to_jpeg_bytes(self.pil)
             return self._jpeg_bytes
 
-    def close(self) -> None:
-        """Release the decoded image backing this frame."""
+    def get_jpeg_path(self) -> str:
+        """Return one fully written, thread-safe temporary JPEG for this frame."""
         with self.cache_lock():
-            self.pil.close()
+            if self._jpeg_path and os.path.isfile(self._jpeg_path):
+                return self._jpeg_path
+            self._jpeg_path = None
+            temporary_path = ""
+            try:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as temporary:
+                    temporary_path = temporary.name
+                    temporary.write(self.get_jpeg_bytes())
+                self._jpeg_path = temporary_path
+                return temporary_path
+            except BaseException as exc:
+                if temporary_path:
+                    try:
+                        os.remove(temporary_path)
+                    except FileNotFoundError:
+                        pass
+                    except OSError as cleanup_error:
+                        _FRAME_LOGGER.warning(
+                            "failed to remove an incomplete frame JPEG: %s",
+                            type(cleanup_error).__name__,
+                        )
+                if isinstance(exc, Exception):
+                    raise RuntimeError("failed to create a compatible frame JPEG") from exc
+                raise
+
+    def compatible_file_path(self, original_path: str) -> str:
+        """Use a cached JPEG only when an AVIF-incompatible path engine needs it."""
+        if self.source_format.strip().lower() == "avif":
+            return self.get_jpeg_path()
+        return original_path
+
+    def temporary_file_paths(self) -> tuple[str, ...]:
+        """Expose owned temporary paths for central report sanitizing and cleanup."""
+        with self.cache_lock():
+            return (self._jpeg_path,) if self._jpeg_path else ()
+
+    def close(self) -> None:
+        """Release decoded pixels, cached bytes, and any owned JPEG fallback."""
+        with self.cache_lock():
+            temporary_path = self._jpeg_path
+            self._jpeg_path = None
+            try:
+                self.pil.close()
+            finally:
+                self._jpeg_bytes = None
+                if temporary_path:
+                    try:
+                        os.remove(temporary_path)
+                    except FileNotFoundError:
+                        pass
+                    except OSError as cleanup_error:
+                        _FRAME_LOGGER.warning(
+                            "failed to remove a frame JPEG fallback: %s",
+                            type(cleanup_error).__name__,
+                        )
 
 
 @dataclass
@@ -105,10 +198,10 @@ class Engine:
             if result.took_ms is None:
                 result.took_ms = now_ms() - t0
             if result.error:
-                result.error = redact_sensitive_text(result.error)
+                result.error = redact_engine_output(result.error, frames)
             return result
         except Exception as exc:
-            error = redact_sensitive_text(f"{type(exc).__name__}: {exc}")
+            error = redact_engine_output(f"{type(exc).__name__}: {exc}", frames)
             self.logger.warning("engine failed: %s", error)
             return EngineResult(name=self.name, status=EngineStatus.ERROR, error=error, took_ms=now_ms() - t0)
 
