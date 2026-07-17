@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 - 2026-07-17
 - Added production AVIF support for local files, directory scans, public HTTP(S) URLs, uppercase/mixed-case suffixes, extensionless input, and AVIF content stored under unrelated suffixes. Detection validates the bounded leading ISO-BMFF `ftyp` box and explicit `avif`/`avis` major or compatible brands instead of trusting filenames, MIME types, or incidental text; generic HEIF/HEIC brands remain unsupported.
 - Raised the core requirement to `Pillow>=11.3.0` and added controlled loader errors for recognized AVIF when the active Pillow build has no working AVIF codec.
 - Decodes AVIF natively to reusable RGB frames and applies a bounded encoded-source size plus the existing dimension, pixel, animation-frame, sampled-frame, and aggregate decoded-pixel limits. Static AVIF and real multi-frame `avis` sequences are covered by tests while preserving existing GIF and WebP sampling behavior.
