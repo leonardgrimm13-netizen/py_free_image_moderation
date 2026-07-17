@@ -341,11 +341,20 @@ def pick_file_dialog() -> Optional[str]:
         import tkinter as tk
         from tkinter import filedialog
         root = tk.Tk()
-        root.withdraw()
         try:
+            root.withdraw()
             path = filedialog.askopenfilename(
-                title="Select an image/GIF",
-                filetypes=[("Images", "*.jpg *.jpeg *.png *.webp *.gif *.bmp *.tif *.tiff"), ("All files", "*.*")],
+                title="Select an image, GIF, SVG, or AVIF",
+                filetypes=[
+                    (
+                        "Images",
+                        "*.[jJ][pP][gG] *.[jJ][pP][eE][gG] *.[pP][nN][gG] "
+                        "*.[wW][eE][bB][pP] *.[gG][iI][fF] *.[bB][mM][pP] "
+                        "*.[tT][iI][fF] *.[tT][iI][fF][fF] *.[sS][vV][gG] "
+                        "*.[aA][vV][iI][fF]",
+                    ),
+                    ("All files", "*.*"),
+                ],
             )
             return path or None
         finally:
@@ -359,11 +368,13 @@ def pick_folder_dialog() -> Optional[str]:
         import tkinter as tk
         from tkinter import filedialog
         root = tk.Tk()
-        root.withdraw()
-        folder = filedialog.askdirectory()
-        root.destroy()
-        if folder:
-            return str(folder)
-        return None
+        try:
+            root.withdraw()
+            folder = filedialog.askdirectory()
+            if folder:
+                return str(folder)
+            return None
+        finally:
+            _destroy_dialog_root(root)
     except Exception:
         return None

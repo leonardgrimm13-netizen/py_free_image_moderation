@@ -3,13 +3,14 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import types
 
 from PIL import Image
 
 from modimg.config import get_config
 from modimg.pipeline import maybe_auto_learn, run_engines
 from modimg.types import Engine, EngineResult
-from modimg.verdict import compute_verdict
+from modimg.verdict import compute_verdict, pick_file_dialog, pick_folder_dialog
 from modimg.enums import EngineStatus, VerdictLabel
 from modimg.types import Frame, Verdict
 
@@ -25,6 +26,68 @@ class SlowEngine(Engine):
 
         time.sleep(self.delay)
         return EngineResult(name=self.name, status="ok", scores={"x": 1.0})
+
+
+class _FakeDialogRoot:
+    def __init__(self, *, fail_withdraw: bool = False) -> None:
+        self.destroyed = False
+        self.fail_withdraw = fail_withdraw
+
+    def withdraw(self) -> None:
+        if self.fail_withdraw:
+            raise RuntimeError("withdraw failed")
+
+    def destroy(self) -> None:
+        self.destroyed = True
+
+
+def _install_fake_tk(monkeypatch, root: _FakeDialogRoot, filedialog: types.ModuleType) -> None:
+    tkinter = types.ModuleType("tkinter")
+    tkinter.Tk = lambda: root
+    tkinter.filedialog = filedialog
+    monkeypatch.setitem(sys.modules, "tkinter", tkinter)
+    monkeypatch.setitem(sys.modules, "tkinter.filedialog", filedialog)
+
+
+def test_file_dialog_filter_supports_uppercase_svg_and_cleans_root(monkeypatch) -> None:
+    root = _FakeDialogRoot()
+    captured: dict[str, object] = {}
+    filedialog = types.ModuleType("tkinter.filedialog")
+
+    def askopenfilename(**kwargs):
+        captured.update(kwargs)
+        return ""
+
+    filedialog.askopenfilename = askopenfilename
+    _install_fake_tk(monkeypatch, root, filedialog)
+
+    assert pick_file_dialog() is None
+    assert "*.[sS][vV][gG]" in str(captured["filetypes"])
+    assert root.destroyed is True
+
+
+def test_folder_dialog_cleans_root_when_the_dialog_raises(monkeypatch) -> None:
+    root = _FakeDialogRoot()
+    filedialog = types.ModuleType("tkinter.filedialog")
+
+    def askdirectory():
+        raise RuntimeError("dialog failed")
+
+    filedialog.askdirectory = askdirectory
+    _install_fake_tk(monkeypatch, root, filedialog)
+
+    assert pick_folder_dialog() is None
+    assert root.destroyed is True
+
+
+def test_file_dialog_cleans_root_when_withdraw_raises(monkeypatch) -> None:
+    root = _FakeDialogRoot(fail_withdraw=True)
+    filedialog = types.ModuleType("tkinter.filedialog")
+    filedialog.askopenfilename = lambda **kwargs: "unexpected"
+    _install_fake_tk(monkeypatch, root, filedialog)
+
+    assert pick_file_dialog() is None
+    assert root.destroyed is True
 
 
 def test_get_config_disable_flag_parsing(monkeypatch) -> None:
@@ -109,20 +172,24 @@ def test_cli_json_serializes_enum_values(tmp_path) -> None:
             "NUDENET_DISABLE": "1",
             "OCR_ENABLE": "0",
             "FORBIDDEN_SYMBOLS_YOLO_ENABLE": "0",
+            "YOLO_BACKEND": "disabled",
             "YOLO_WEAPON_MODEL": str(tmp_path / "missing-weapons.pt"),
+            "API_POLICY": "never",
+            "NO_CHECKS_POLICY": "ok",
         }
     )
 
     proc = subprocess.run(
         [sys.executable, "-m", "modimg.cli", str(img_path), "--no-apis", "--json", str(out_path)],
         check=False,
+        timeout=60,
         capture_output=True,
         text=True,
         encoding="utf-8",
         errors="replace",
         env=env,
     )
-    assert proc.returncode in (0, 2)
+    assert proc.returncode == 0
     data = json.loads(out_path.read_text(encoding="utf-8"))
     assert isinstance(data["verdict"]["label"], str)
     assert data["verdict"]["label"] in {"OK", "REVIEW", "BLOCK"}

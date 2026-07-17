@@ -267,7 +267,13 @@ def test_run_on_input_cleans_downloaded_temp_file_on_engine_error(monkeypatch, t
 
 
 def test_run_on_input_closes_decoded_frames(monkeypatch) -> None:
+    from modimg.preprocessing import PreparedImage
+
     frame = Frame(idx=0, pil=Image.new("RGB", (4, 4)))
+    monkeypatch.setattr(
+        "modimg.pipeline.prepare_image",
+        lambda path: PreparedImage(path, "png", "png"),
+    )
     monkeypatch.setattr("modimg.pipeline.load_frames", lambda path, sample_frames: [frame])
     monkeypatch.setattr("modimg.pipeline.build_pre_engines", lambda **kwargs: [])
     monkeypatch.setattr("modimg.pipeline.build_local_engines", lambda **kwargs: [])

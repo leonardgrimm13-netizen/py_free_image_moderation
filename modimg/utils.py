@@ -8,10 +8,12 @@ import json
 import math
 import mimetypes
 import os
+import queue
 import re
 import socket
 import ssl
 import tempfile
+import threading
 import time
 import urllib.parse
 from pathlib import Path
@@ -19,10 +21,16 @@ from typing import Any, Tuple
 
 from PIL import Image
 
+from .logging_utils import get_logger
 
-_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tif", ".tiff"}
+
+LOGGER = get_logger("utils")
+_IMAGE_SNIFF_BYTES = 256
+_AVIF_BRANDS = {b"avif", b"avis"}
+_RASTER_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tif", ".tiff", ".avif"}
 _SENSITIVE_ENV_NAMES = ("OPENAI_API_KEY", "SIGHTENGINE_SECRET", "SIGHTENGINE_USER")
 _URL_IN_TEXT_RE = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
+_DNS_RESOLVER_SLOTS = threading.BoundedSemaphore(4)
 
 def env_int(name: str, default: int) -> int:
     """Read an int from env, returning default on missing/invalid."""
@@ -150,22 +158,71 @@ def pil_to_jpeg_bytes(img: Image.Image, quality: int = 90) -> bytes:
     elif img.mode == "L":
         img = img.convert("RGB")
     out = io.BytesIO()
-    img.save(out, format="JPEG", quality=quality, optimize=True)
+    img.save(out, format="JPEG", quality=quality)
     return out.getvalue()
 
 def guess_mime(path: str) -> str:
+    if Path(path).suffix.lower() == ".avif":
+        return "image/avif"
     m, _ = mimetypes.guess_type(path)
     return m or "application/octet-stream"
 
 def is_image_file(path: str) -> bool:
     ext = os.path.splitext(path)[1].lower()
-    if ext in _IMAGE_EXTENSIONS:
+    if ext in _RASTER_IMAGE_EXTENSIONS:
         return True
     try:
         with open(path, "rb") as f:
-            return bool(_sniff_image(f.read(16))[0])
+            prefix = f.read(_IMAGE_SNIFF_BYTES)
+            if _sniff_image(prefix)[0]:
+                return True
+            from .svg import is_svg_bytes, max_svg_bytes
+
+            limit = max_svg_bytes()
+            data = prefix + f.read(max(0, limit + 1 - len(prefix)))
+            if len(data) > limit:
+                return False
+            return is_svg_bytes(data)
     except OSError:
         return False
+
+def _is_avif_ftyp(data0: bytes) -> bool:
+    """Validate a bounded ISO-BMFF ``ftyp`` box that explicitly brands AVIF.
+
+    Generic HEIF/HEIC brands are intentionally insufficient. The complete
+    first box must fit in the bounded sniff prefix so compatible brands can be
+    checked without reading an untrusted file in full.
+    """
+    data = data0[:_IMAGE_SNIFF_BYTES]
+    if len(data) < 16 or data[4:8] != b"ftyp":
+        return False
+
+    size32 = int.from_bytes(data[:4], "big")
+    if size32 == 0:
+        return False
+    if size32 == 1:
+        if len(data) < 24:
+            return False
+        box_size = int.from_bytes(data[8:16], "big")
+        brand_offset = 16
+    else:
+        box_size = size32
+        brand_offset = 8
+
+    minimum_size = brand_offset + 8
+    if box_size < minimum_size or box_size > _IMAGE_SNIFF_BYTES or box_size > len(data):
+        return False
+    compatible_offset = brand_offset + 8
+    if (box_size - compatible_offset) % 4 != 0:
+        return False
+
+    major_brand = data[brand_offset : brand_offset + 4]
+    compatible_brands = {
+        data[offset : offset + 4]
+        for offset in range(compatible_offset, box_size, 4)
+    }
+    return major_brand in _AVIF_BRANDS or bool(compatible_brands & _AVIF_BRANDS)
+
 
 def _sniff_image(data0: bytes) -> Tuple[str, str]:
     if data0.startswith(b"\xff\xd8\xff"):
@@ -180,6 +237,8 @@ def _sniff_image(data0: bytes) -> Tuple[str, str]:
         return ".bmp", "image/bmp"
     if data0.startswith((b"II*\x00", b"MM\x00*")):
         return ".tiff", "image/tiff"
+    if _is_avif_ftyp(data0):
+        return ".avif", "image/avif"
     return "", ""
 
 def redact_url(url: str) -> str:
@@ -211,11 +270,13 @@ def redact_sensitive_text(value: Any, *, extra_secrets: tuple[str, ...] = ()) ->
 
 
 def _remove_file_if_exists(path: str | os.PathLike[str]) -> None:
-    """Remove a cleanup target while tolerating an already-removed file."""
+    """Best-effort removal that never replaces an earlier processing error."""
     try:
         os.remove(path)
     except FileNotFoundError:
         return
+    except OSError as exc:
+        LOGGER.warning("failed to remove a temporary file: %s", type(exc).__name__)
 
 
 def atomic_write_text(path: str | os.PathLike[str], text: str, *, encoding: str = "utf-8") -> None:
@@ -268,9 +329,55 @@ def _validated_url(url: str) -> tuple[urllib.parse.SplitResult, str, int]:
     return parsed, ascii_host, resolved_port
 
 
-def _resolve_url_addresses(host: str, port: int, *, allow_private: bool) -> list[tuple[int, int, int, tuple[Any, ...]]]:
+def _getaddrinfo_with_timeout(host: str, port: int, timeout: float) -> list[tuple[Any, ...]]:
+    """Run the platform resolver behind a bounded deadline."""
+    deadline = time.monotonic() + max(0.0, timeout)
+    if not _DNS_RESOLVER_SLOTS.acquire(timeout=max(0.0, timeout)):
+        raise TimeoutError(f"URL host resolution timed out: {host}")
+
+    outcome: queue.Queue[tuple[bool, Any]] = queue.Queue(maxsize=1)
+
+    def resolve() -> None:
+        try:
+            outcome.put((True, socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)))
+        except BaseException as exc:
+            outcome.put((False, exc))
+        finally:
+            _DNS_RESOLVER_SLOTS.release()
+
+    resolver_thread = threading.Thread(target=resolve, name="modimg-dns-resolver", daemon=True)
     try:
-        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        resolver_thread.start()
+    except BaseException:
+        _DNS_RESOLVER_SLOTS.release()
+        raise
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError(f"URL host resolution timed out: {host}")
+    try:
+        succeeded, value = outcome.get(timeout=remaining)
+    except queue.Empty as exc:
+        raise TimeoutError(f"URL host resolution timed out: {host}") from exc
+    if not succeeded:
+        raise value
+    return value
+
+
+def _resolve_url_addresses(
+    host: str,
+    port: int,
+    *,
+    allow_private: bool,
+    timeout: float | None = None,
+) -> list[tuple[int, int, int, tuple[Any, ...]]]:
+    try:
+        infos = (
+            socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+            if timeout is None
+            else _getaddrinfo_with_timeout(host, port, timeout)
+        )
+    except TimeoutError:
+        raise
     except OSError as exc:
         raise RuntimeError(f"URL host could not be resolved: {host}") from exc
 
@@ -346,25 +453,34 @@ def _request_url_once(
     allow_private: bool,
     context: ssl.SSLContext,
 ) -> tuple[http.client.HTTPConnection, http.client.HTTPResponse]:
+    deadline = time.monotonic() + max(0.0, timeout)
     parsed, host, port = _validated_url(url)
-    addresses = _resolve_url_addresses(host, port, allow_private=allow_private)
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("URL request timed out")
+    addresses = _resolve_url_addresses(host, port, allow_private=allow_private, timeout=remaining)
     path = urllib.parse.quote(parsed.path or "/", safe="/%:@!$&'()*+,;=-._~")
     if parsed.query:
         path = f"{path}?{urllib.parse.quote(parsed.query, safe='=&;%:+,/?@!$()*-._~')}"
     headers = {"User-Agent": "image-moderator/1.0", "Accept": "image/*,*/*;q=0.8", "Connection": "close"}
     last_error: OSError | ssl.SSLError | http.client.HTTPException | None = None
     for address in addresses:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("URL request timed out") from last_error
         connection: http.client.HTTPConnection
         if parsed.scheme.lower() == "https":
-            connection = _PinnedHTTPSConnection(host, port, address, timeout, context)
+            connection = _PinnedHTTPSConnection(host, port, address, remaining, context)
         else:
-            connection = _PinnedHTTPConnection(host, port, address, timeout)
+            connection = _PinnedHTTPConnection(host, port, address, remaining)
         try:
             connection.request("GET", path, headers=headers)
             return connection, connection.getresponse()
         except (OSError, ssl.SSLError, http.client.HTTPException) as exc:
             last_error = exc
             connection.close()
+    if deadline - time.monotonic() <= 0:
+        raise TimeoutError("URL request timed out") from last_error
     raise RuntimeError(f"Could not connect to URL host: {host}") from last_error
 
 
@@ -439,37 +555,78 @@ def download_url_to_temp(
                 raise RuntimeError(f"URL too large: {declared_size} bytes (limit {byte_limit})")
 
         content_type = _response_header(response, "Content-Type").split(";", 1)[0].strip().lower()
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise TimeoutError(f"URL download timed out after {timeout:g}s")
-        if connection.sock is not None:
-            connection.sock.settimeout(remaining)
-        first_chunk = response.read(min(65_536, byte_limit + 1))
+        def read_chunk(size: int) -> bytes:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(f"URL download timed out after {timeout:g}s")
+            if connection.sock is not None:
+                connection.sock.settimeout(remaining)
+            return response.read(size)
+
+        first_chunk = read_chunk(min(_IMAGE_SNIFF_BYTES, byte_limit + 1))
         if len(first_chunk) > byte_limit:
             raise RuntimeError(f"URL too large: downloaded > {byte_limit} bytes")
         sniff_ext, _sniff_mime = _sniff_image(first_chunk)
-        if not sniff_ext:
-            if content_type and not content_type.startswith("image/"):
-                raise RuntimeError(f"URL did not return an image (content-type={content_type})")
-            raise RuntimeError("URL does not contain a supported image format (jpeg/png/webp/gif/bmp/tiff)")
-
         total = len(first_chunk)
-        with tempfile.NamedTemporaryFile(delete=False, suffix=sniff_ext) as tmp:
-            tmp_path = tmp.name
-            tmp.write(first_chunk)
+
+        if sniff_ext:
+            format_limit = byte_limit
+            if sniff_ext == ".avif":
+                format_limit = min(byte_limit, max(1, env_int("MODIMG_MAX_AVIF_BYTES", 100_000_000)))
+                if content_length and declared_size > format_limit:
+                    raise RuntimeError(f"URL AVIF too large: {declared_size} bytes (limit {format_limit})")
+                if total > format_limit:
+                    raise RuntimeError(f"URL AVIF too large: downloaded > {format_limit} bytes")
+            with tempfile.NamedTemporaryFile(delete=False, suffix=sniff_ext) as tmp:
+                tmp_path = tmp.name
+                tmp.write(first_chunk)
+                while True:
+                    chunk = read_chunk(min(65_536, format_limit - total + 1))
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > format_limit:
+                        limit_name = "URL AVIF" if format_limit < byte_limit else "URL"
+                        raise RuntimeError(f"{limit_name} too large: downloaded > {format_limit} bytes")
+                    tmp.write(chunk)
+        else:
+            from .svg import SvgConfigurationError, SvgError, max_svg_bytes, validate_svg_bytes
+
+            svg_limit = min(byte_limit, max_svg_bytes())
+            if content_length and declared_size > svg_limit:
+                raise RuntimeError(f"URL SVG too large: {declared_size} bytes (limit {svg_limit})")
+            if total > svg_limit:
+                raise RuntimeError(f"URL SVG too large: downloaded > {svg_limit} bytes")
+            svg_data = bytearray(first_chunk)
             while True:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise TimeoutError(f"URL download timed out after {timeout:g}s")
-                if connection.sock is not None:
-                    connection.sock.settimeout(remaining)
-                chunk = response.read(min(65_536, byte_limit - total + 1))
+                chunk = read_chunk(min(65_536, svg_limit - total + 1))
                 if not chunk:
                     break
                 total += len(chunk)
-                if total > byte_limit:
-                    raise RuntimeError(f"URL too large: downloaded > {byte_limit} bytes")
-                tmp.write(chunk)
+                if total > svg_limit:
+                    raise RuntimeError(f"URL SVG too large: downloaded > {svg_limit} bytes")
+                svg_data.extend(chunk)
+            try:
+                validate_svg_bytes(bytes(svg_data))
+            except SvgConfigurationError:
+                # The downloaded document is structurally a safe SVG. Keep the
+                # configuration error for the preprocessing layer, where it can
+                # be reported accurately as a Loader failure.
+                pass
+            except SvgError as exc:
+                svg_hint = content_type == "image/svg+xml" or urllib.parse.urlsplit(current_url).path.lower().endswith(".svg")
+                avif_hint = content_type == "image/avif" or urllib.parse.urlsplit(current_url).path.lower().endswith(".avif")
+                if avif_hint:
+                    raise RuntimeError("URL does not contain a valid AVIF image") from exc
+                if content_type and not content_type.startswith("image/") and not svg_hint:
+                    raise RuntimeError(f"URL did not return an image (content-type={content_type})") from exc
+                raise RuntimeError(
+                    f"URL does not contain a supported image format (jpeg/png/webp/gif/bmp/tiff/avif/svg): {exc}"
+                ) from exc
+            sniff_ext = ".svg"
+            with tempfile.NamedTemporaryFile(delete=False, suffix=sniff_ext) as tmp:
+                tmp_path = tmp.name
+                tmp.write(svg_data)
 
         display = os.path.basename(urllib.parse.urlsplit(current_url).path) or ("downloaded" + sniff_ext)
         return tmp_path, display
@@ -478,8 +635,16 @@ def download_url_to_temp(
             _remove_file_if_exists(tmp_path)
         raise
     finally:
-        response.close()
-        connection.close()
+        try:
+            try:
+                response.close()
+            except Exception as exc:
+                LOGGER.warning("failed to close URL response: %s", type(exc).__name__)
+        finally:
+            try:
+                connection.close()
+            except Exception as exc:
+                LOGGER.warning("failed to close URL connection: %s", type(exc).__name__)
 
 def safe_model_dump(obj: Any) -> Any:
     if hasattr(obj, "model_dump"):

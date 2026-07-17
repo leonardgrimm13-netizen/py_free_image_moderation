@@ -8,6 +8,7 @@ def test_python_m_modimg_help() -> None:
     proc = subprocess.run(
         [sys.executable, "-m", "modimg", "--help"],
         check=False,
+        timeout=60,
         capture_output=True,
         text=True,
         encoding="utf-8",

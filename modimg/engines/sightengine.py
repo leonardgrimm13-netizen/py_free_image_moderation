@@ -329,58 +329,75 @@ class SightengineEngine(Engine):
                 )
 
             try:
-                status_code = int(r.status_code)
-            except (TypeError, ValueError, OverflowError):
-                return EngineResult(
-                    name=self.name,
-                    status=EngineStatus.ERROR,
-                    error="Sightengine returned an invalid HTTP status",
-                    took_ms=now_ms() - start,
-                )
-            if status_code in (402, 403, 429):
-                self._disable_for_run(f"quota/limit http={status_code}")
-                return mk_skipped(self, self.disabled_reason or "quota/limit", took_ms=now_ms() - start)
-            if status_code >= 400:
-                return EngineResult(name=self.name, status=EngineStatus.ERROR, error=f"http error {status_code}", took_ms=now_ms() - start)
-
-            try:
-                headers = getattr(r, "headers", {}) or {}
-                data = r.json() if "application/json" in str(headers.get("content-type", "")).lower() else json.loads(r.text or "{}")
-            except Exception as exc:
-                return EngineResult(
-                    name=self.name,
-                    status=EngineStatus.ERROR,
-                    error=redact_sensitive_text(f"invalid JSON response: {type(exc).__name__}: {exc}"),
-                    took_ms=now_ms() - start,
-                )
-            if not isinstance(data, dict):
-                return EngineResult(
-                    name=self.name,
-                    status=EngineStatus.ERROR,
-                    error="invalid JSON response: expected an object",
-                    took_ms=now_ms() - start,
-                )
-            if str(data.get("status") or "").lower() != "success":
-                err = data.get("error") or data.get("message") or str(data)
-                if "quota" in str(err).lower() or "limit" in str(err).lower():
-                    self._disable_for_run(f"quota/limit: {redact_sensitive_text(err)[:200]}")
+                try:
+                    status_code = int(r.status_code)
+                except (TypeError, ValueError, OverflowError):
+                    return EngineResult(
+                        name=self.name,
+                        status=EngineStatus.ERROR,
+                        error="Sightengine returned an invalid HTTP status",
+                        took_ms=now_ms() - start,
+                    )
+                if status_code in (402, 403, 429):
+                    self._disable_for_run(f"quota/limit http={status_code}")
                     return mk_skipped(self, self.disabled_reason or "quota/limit", took_ms=now_ms() - start)
-                return EngineResult(
-                    name=self.name,
-                    status=EngineStatus.ERROR,
-                    error=redact_sensitive_text(err)[:400],
-                    details={"api_status": str(data.get("status") or "")[:80]},
-                    took_ms=now_ms() - start,
-                )
+                if status_code >= 400:
+                    return EngineResult(
+                        name=self.name,
+                        status=EngineStatus.ERROR,
+                        error=f"http error {status_code}",
+                        took_ms=now_ms() - start,
+                    )
 
-            sc = _extract_scores(data)
-            if not any(key != "operations_used" for key in sc):
-                return EngineResult(
-                    name=self.name,
-                    status=EngineStatus.ERROR,
-                    error="Sightengine success response contained no recognized moderation scores",
-                    took_ms=now_ms() - start,
-                )
+                try:
+                    headers = getattr(r, "headers", {}) or {}
+                    data = (
+                        r.json()
+                        if "application/json" in str(headers.get("content-type", "")).lower()
+                        else json.loads(r.text or "{}")
+                    )
+                except Exception as exc:
+                    return EngineResult(
+                        name=self.name,
+                        status=EngineStatus.ERROR,
+                        error=redact_sensitive_text(f"invalid JSON response: {type(exc).__name__}: {exc}"),
+                        took_ms=now_ms() - start,
+                    )
+                if not isinstance(data, dict):
+                    return EngineResult(
+                        name=self.name,
+                        status=EngineStatus.ERROR,
+                        error="invalid JSON response: expected an object",
+                        took_ms=now_ms() - start,
+                    )
+                if str(data.get("status") or "").lower() != "success":
+                    err = data.get("error") or data.get("message") or str(data)
+                    if "quota" in str(err).lower() or "limit" in str(err).lower():
+                        self._disable_for_run(f"quota/limit: {redact_sensitive_text(err)[:200]}")
+                        return mk_skipped(self, self.disabled_reason or "quota/limit", took_ms=now_ms() - start)
+                    return EngineResult(
+                        name=self.name,
+                        status=EngineStatus.ERROR,
+                        error=redact_sensitive_text(err)[:400],
+                        details={"api_status": str(data.get("status") or "")[:80]},
+                        took_ms=now_ms() - start,
+                    )
+
+                sc = _extract_scores(data)
+                if not any(key != "operations_used" for key in sc):
+                    return EngineResult(
+                        name=self.name,
+                        status=EngineStatus.ERROR,
+                        error="Sightengine success response contained no recognized moderation scores",
+                        took_ms=now_ms() - start,
+                    )
+            finally:
+                close_response = getattr(r, "close", None)
+                if callable(close_response):
+                    try:
+                        close_response()
+                    except Exception as exc:
+                        self.logger.warning("failed to close Sightengine response: %s", type(exc).__name__)
             per_frame.append({"frame": int(fr.idx), "scores": sc})
             for k, v in sc.items():
                 if isinstance(v, (int, float)):

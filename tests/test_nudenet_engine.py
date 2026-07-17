@@ -4,6 +4,7 @@ import sys
 import threading
 import types
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 from PIL import Image
 
@@ -82,3 +83,62 @@ def test_nudenet_serializes_inference_on_cached_detector(monkeypatch) -> None:
     assert [result.status for result in results] == [EngineStatus.OK, EngineStatus.OK]
     assert inference_lock.attempts == 2
     assert detector.max_active == 1
+
+
+def test_nudenet_avif_uses_lazy_rgb_jpeg_fallback_from_decoded_frame(monkeypatch) -> None:
+    seen_paths: list[str] = []
+    seen_pixels: list[tuple[int, int, int]] = []
+
+    class Detector:
+        def detect(self, path: str):
+            seen_paths.append(path)
+            assert Path(path).suffix == ".jpg"
+            assert Path(path).is_file()
+            with Image.open(path) as image:
+                assert image.format == "JPEG"
+                assert image.mode == "RGB"
+                seen_pixels.append(image.getpixel((0, 0)))
+            return []
+
+    detector = Detector()
+    monkeypatch.setattr(NudeNetEngine, "_DETECTOR", detector)
+    monkeypatch.setitem(sys.modules, "nudenet", types.SimpleNamespace(NudeDetector=lambda: detector))
+    frame = Frame(idx=0, pil=Image.new("RGB", (6, 4), color=(40, 90, 150)), source_format="avif")
+
+    try:
+        result = NudeNetEngine().run("original.avif", [frame])
+
+        assert result.status == EngineStatus.OK
+        assert len(seen_paths) == 1
+        assert Path(seen_paths[0]).exists()
+        # JPEG is lossy, but it must come from the already decoded frame.
+        assert all(abs(actual - expected) <= 5 for actual, expected in zip(seen_pixels[0], (40, 90, 150), strict=True))
+        assert frame.temporary_file_paths() == (seen_paths[0],)
+    finally:
+        frame.close()
+
+    assert Path(seen_paths[0]).exists() is False
+
+
+def test_nudenet_non_avif_single_frame_keeps_original_path_without_fallback(monkeypatch, tmp_path) -> None:
+    original = tmp_path / "ordinary.png"
+    Image.new("RGB", (4, 3), color=(1, 2, 3)).save(original)
+    seen_paths: list[str] = []
+
+    class Detector:
+        def detect(self, path: str):
+            seen_paths.append(path)
+            return []
+
+    detector = Detector()
+    monkeypatch.setattr(NudeNetEngine, "_DETECTOR", detector)
+    monkeypatch.setitem(sys.modules, "nudenet", types.SimpleNamespace(NudeDetector=lambda: detector))
+    frame = Frame(idx=0, pil=Image.new("RGB", (4, 3)), source_format="png")
+
+    try:
+        result = NudeNetEngine().run(str(original), [frame])
+        assert result.status == EngineStatus.OK
+        assert seen_paths == [str(original)]
+        assert frame.temporary_file_paths() == ()
+    finally:
+        frame.close()

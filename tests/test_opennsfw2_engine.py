@@ -5,7 +5,9 @@ import sys
 import threading
 import types
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
+import pytest
 from PIL import Image
 
 from modimg.engines.opennsfw2_engine import OpenNSFW2Engine
@@ -165,3 +167,170 @@ def test_opennsfw2_serializes_in_process_inference(monkeypatch) -> None:
     assert [result.status for result in results] == [EngineStatus.OK, EngineStatus.OK]
     assert inference_lock.attempts == 2
     assert max_active == 1
+
+
+@pytest.mark.parametrize("mode", ["0", "auto"])
+def test_opennsfw2_subprocess_modes_receive_one_compatible_avif_jpeg_fallback(monkeypatch, mode: str) -> None:
+    monkeypatch.setenv("OPENNSFW2_IN_PROCESS", mode)
+    engine = OpenNSFW2Engine()
+    calls: list[tuple[str, str]] = []
+
+    def inspect_path(kind: str, path: str) -> None:
+        fallback = Path(path)
+        assert fallback.suffix == ".jpg"
+        assert fallback.is_file()
+        with Image.open(fallback) as image:
+            assert image.format == "JPEG"
+            assert image.mode == "RGB"
+            assert image.size == (7, 5)
+        calls.append((kind, path))
+
+    def fake_in_process(path, frames, start):
+        assert path == "original.avif"
+        assert frames[0].temporary_file_paths() == ()
+        calls.append(("in_process", path))
+        return EngineResult(name=engine.name, status=EngineStatus.ERROR, error="retry")
+
+    def fake_subprocess(path, start):
+        inspect_path("subprocess", path)
+        return EngineResult(name=engine.name, status=EngineStatus.OK, scores={"nsfw_probability": 0.2})
+
+    monkeypatch.setattr(engine, "_predict_in_process", fake_in_process)
+    monkeypatch.setattr(engine, "_predict_in_subprocess", fake_subprocess)
+    frame = Frame(idx=0, pil=Image.new("RGB", (7, 5), color=(20, 60, 100)), source_format="avif")
+
+    try:
+        result = engine.run("original.avif", [frame])
+        assert result.status == EngineStatus.OK
+        expected_kinds = ["subprocess"] if mode == "0" else ["in_process", "subprocess"]
+        assert [kind for kind, _path in calls] == expected_kinds
+        fallback_path = calls[-1][1]
+        assert frame.temporary_file_paths() == (fallback_path,)
+        assert Path(fallback_path).exists()
+    finally:
+        frame.close()
+
+    assert Path(fallback_path).exists() is False
+
+
+def test_opennsfw2_in_process_path_api_lazily_receives_avif_jpeg_fallback(monkeypatch) -> None:
+    monkeypatch.setenv("OPENNSFW2_IN_PROCESS", "1")
+    seen_paths: list[str] = []
+
+    def predict_image(path: str) -> float:
+        fallback = Path(path)
+        assert fallback.suffix == ".jpg"
+        assert fallback.is_file()
+        with Image.open(fallback) as image:
+            assert image.format == "JPEG"
+            assert image.mode == "RGB"
+            assert image.size == (7, 5)
+        seen_paths.append(path)
+        return 0.1
+
+    engine = OpenNSFW2Engine()
+    monkeypatch.setattr(engine, "_import_backend", lambda: ("fake", types.SimpleNamespace(predict_image=predict_image)))
+    frame = Frame(idx=0, pil=Image.new("RGB", (7, 5), color=(20, 60, 100)), source_format="avif")
+
+    try:
+        result = engine.run("original.avif", [frame])
+        assert result.status == EngineStatus.OK
+        assert frame.temporary_file_paths() == (seen_paths[0],)
+    finally:
+        frame.close()
+
+    assert Path(seen_paths[0]).exists() is False
+
+
+def test_opennsfw2_predict_only_backend_uses_avif_frame_without_fallback(monkeypatch) -> None:
+    monkeypatch.setenv("OPENNSFW2_IN_PROCESS", "1")
+
+    def predict(image: Image.Image) -> float:
+        assert image.mode == "RGB"
+        assert image.size == (7, 5)
+        return 0.1
+
+    engine = OpenNSFW2Engine()
+    monkeypatch.setattr(engine, "_import_backend", lambda: ("fake", types.SimpleNamespace(predict=predict)))
+    frame = Frame(idx=0, pil=Image.new("RGB", (7, 5), color=(20, 60, 100)), source_format="avif")
+
+    try:
+        result = engine.run("original.avif", [frame])
+        assert result.status == EngineStatus.OK
+        assert frame.temporary_file_paths() == ()
+    finally:
+        frame.close()
+
+
+def test_opennsfw2_in_process_import_failure_does_not_create_avif_fallback(monkeypatch) -> None:
+    monkeypatch.setenv("OPENNSFW2_IN_PROCESS", "1")
+    engine = OpenNSFW2Engine()
+
+    def unavailable_backend():
+        raise ModuleNotFoundError("backend unavailable")
+
+    monkeypatch.setattr(engine, "_import_backend", unavailable_backend)
+    frame = Frame(idx=0, pil=Image.new("RGB", (7, 5)), source_format="avif")
+
+    try:
+        result = engine.run("original.avif", [frame])
+        assert result.status == EngineStatus.SKIPPED
+        assert frame.temporary_file_paths() == ()
+    finally:
+        frame.close()
+
+
+def test_opennsfw2_subprocess_command_receives_avif_fallback_not_original(monkeypatch) -> None:
+    captured_command: list[str] = []
+
+    def fake_run(command, **kwargs):
+        captured_command.extend(command)
+        fallback = Path(command[-1])
+        assert fallback.suffix == ".jpg"
+        assert fallback.is_file()
+        with Image.open(fallback) as image:
+            assert image.format == "JPEG"
+            assert image.mode == "RGB"
+        return types.SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"ok": True, "backend": "fake", "probability": 0.2}) + "\n",
+            stderr="",
+        )
+
+    monkeypatch.setenv("OPENNSFW2_IN_PROCESS", "0")
+    monkeypatch.setattr("modimg.engines.opennsfw2_engine.subprocess.run", fake_run)
+    frame = Frame(idx=0, pil=Image.new("RGB", (6, 4), color=(50, 100, 150)), source_format="avif")
+
+    try:
+        result = OpenNSFW2Engine().run("original.avif", [frame])
+        assert result.status == EngineStatus.OK
+        assert captured_command[-1] != "original.avif"
+        fallback_path = captured_command[-1]
+        assert Path(fallback_path).exists()
+    finally:
+        frame.close()
+
+    assert Path(fallback_path).exists() is False
+
+
+def test_opennsfw2_non_avif_keeps_original_path(monkeypatch, tmp_path) -> None:
+    original = tmp_path / "ordinary.png"
+    Image.new("RGB", (4, 4)).save(original)
+    engine = OpenNSFW2Engine()
+    seen: list[str] = []
+    monkeypatch.setenv("OPENNSFW2_IN_PROCESS", "1")
+    monkeypatch.setattr(
+        engine,
+        "_predict_in_process",
+        lambda path, frames, start: seen.append(path)
+        or EngineResult(name=engine.name, status=EngineStatus.OK, scores={"nsfw_probability": 0.1}),
+    )
+    frame = Frame(idx=0, pil=Image.new("RGB", (4, 4)), source_format="png")
+
+    try:
+        result = engine.run(str(original), [frame])
+        assert result.status == EngineStatus.OK
+        assert seen == [str(original)]
+        assert frame.temporary_file_paths() == ()
+    finally:
+        frame.close()

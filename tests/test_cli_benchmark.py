@@ -11,6 +11,11 @@ def _make_image(path) -> None:
     Image.new("RGB", (16, 16), color=(50, 100, 150)).save(path)
 
 
+def _make_avif(path) -> None:
+    with Image.new("RGB", (16, 12), color=(30, 80, 160)) as image:
+        image.save(path, format="AVIF", quality=90)
+
+
 def _light_env(tmp_path) -> dict[str, str]:
     import os
 
@@ -21,7 +26,10 @@ def _light_env(tmp_path) -> dict[str, str]:
             "NUDENET_DISABLE": "1",
             "OCR_ENABLE": "0",
             "FORBIDDEN_SYMBOLS_YOLO_ENABLE": "0",
+            "YOLO_BACKEND": "disabled",
             "YOLO_WEAPON_MODEL": str(tmp_path / "missing-weapons.pt"),
+            "API_POLICY": "never",
+            "NO_CHECKS_POLICY": "ok",
         }
     )
     return env
@@ -35,6 +43,7 @@ def test_cli_benchmark_json_file(tmp_path) -> None:
     proc = subprocess.run(
         [sys.executable, "moderate_image.py", str(img_path), "--no-apis", "--benchmark-json", str(bench_path)],
         check=False,
+        timeout=60,
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -43,7 +52,7 @@ def test_cli_benchmark_json_file(tmp_path) -> None:
     )
 
     combined = f"{proc.stdout}\n{proc.stderr}"
-    assert proc.returncode in (0, 2)
+    assert proc.returncode == 0
     assert "Traceback (most recent call last)" not in combined
     assert bench_path.exists()
     payload = json.loads(bench_path.read_text(encoding="utf-8"))
@@ -65,6 +74,7 @@ def test_cli_benchmark_console_does_not_crash(tmp_path) -> None:
     proc = subprocess.run(
         [sys.executable, "moderate_image.py", str(img_path), "--no-apis", "--benchmark"],
         check=False,
+        timeout=60,
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -73,7 +83,7 @@ def test_cli_benchmark_console_does_not_crash(tmp_path) -> None:
     )
 
     combined = f"{proc.stdout}\n{proc.stderr}"
-    assert proc.returncode in (0, 2)
+    assert proc.returncode == 0
     assert "Traceback (most recent call last)" not in combined
     assert "BENCHMARK" in combined
     assert "Files" in combined
@@ -88,6 +98,7 @@ def test_cli_benchmark_does_not_change_old_json_single_report(tmp_path) -> None:
     proc = subprocess.run(
         [sys.executable, "moderate_image.py", str(img_path), "--no-apis", "--json", str(json_path)],
         check=False,
+        timeout=60,
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -95,7 +106,7 @@ def test_cli_benchmark_does_not_change_old_json_single_report(tmp_path) -> None:
         env=_light_env(tmp_path),
     )
 
-    assert proc.returncode in (0, 2)
+    assert proc.returncode == 0
     assert json_path.exists()
     payload = json.loads(json_path.read_text(encoding="utf-8"))
     assert isinstance(payload, dict)
@@ -125,6 +136,7 @@ def test_cli_benchmark_still_does_not_change_old_json_single_report(tmp_path) ->
             str(benchmark_json_path),
         ],
         check=False,
+        timeout=60,
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -132,7 +144,7 @@ def test_cli_benchmark_still_does_not_change_old_json_single_report(tmp_path) ->
         env=_light_env(tmp_path),
     )
 
-    assert proc.returncode in (0, 2)
+    assert proc.returncode == 0
     assert moderation_json_path.exists()
     assert benchmark_json_path.exists()
     moderation_payload = json.loads(moderation_json_path.read_text(encoding="utf-8"))
@@ -148,6 +160,7 @@ def test_cli_benchmark_help_lists_flags() -> None:
     proc = subprocess.run(
         [sys.executable, "moderate_image.py", "--help"],
         check=False,
+        timeout=60,
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -158,6 +171,44 @@ def test_cli_benchmark_help_lists_flags() -> None:
     help_text = f"{proc.stdout}\n{proc.stderr}"
     assert "--benchmark" in help_text
     assert "--benchmark-json" in help_text
+
+
+def test_cli_benchmark_processes_avif_natively(tmp_path) -> None:
+    image_path = tmp_path / "benchmark.AVIF"
+    moderation_path = tmp_path / "moderation.json"
+    benchmark_path = tmp_path / "benchmark.json"
+    _make_avif(image_path)
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "modimg.cli",
+            str(image_path),
+            "--no-apis",
+            "--json",
+            str(moderation_path),
+            "--benchmark-json",
+            str(benchmark_path),
+        ],
+        check=False,
+        timeout=60,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=_light_env(tmp_path),
+    )
+
+    combined = f"{proc.stdout}\n{proc.stderr}"
+    assert proc.returncode == 0
+    assert "Traceback (most recent call last)" not in combined
+    moderation = json.loads(moderation_path.read_text(encoding="utf-8"))
+    benchmark = json.loads(benchmark_path.read_text(encoding="utf-8"))
+    assert moderation["path"] == str(image_path)
+    assert moderation["preprocessing"] == {"source_format": "avif", "native_decode": True}
+    assert benchmark["total_files"] == 1
+    assert benchmark["slowest_files"][0]["path"] == str(image_path)
 
 
 def test_cli_benchmark_wall_time_is_measured_for_all_file_worker_modes(monkeypatch, tmp_path) -> None:

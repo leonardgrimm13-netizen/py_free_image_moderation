@@ -11,7 +11,7 @@ from typing import Any, List, Tuple, Optional
 from PIL import Image
 
 from ..enums import EngineStatus
-from ..types import Engine, EngineResult
+from ..types import Engine, EngineResult, Frame
 from ..utils import env_bool, env_float, now_ms, redact_sensitive_text, safe_float01
 
 class OpenNSFW2Engine(Engine):
@@ -131,11 +131,13 @@ class OpenNSFW2Engine(Engine):
         try:
             # Official opennsfw2 API exposes predict_image/predict_images for image paths.
             if hasattr(n2, "predict_image"):
+                engine_path = frames[0].compatible_file_path(path) if isinstance(frames[0], Frame) else path
                 with OpenNSFW2Engine._INFERENCE_LOCK:
-                    prob = n2.predict_image(path)
+                    prob = n2.predict_image(engine_path)
             elif hasattr(n2, "predict_images"):
+                engine_path = frames[0].compatible_file_path(path) if isinstance(frames[0], Frame) else path
                 with OpenNSFW2Engine._INFERENCE_LOCK:
-                    prob = (n2.predict_images([path]) or [0.0])[0]
+                    prob = (n2.predict_images([engine_path]) or [0.0])[0]
             elif hasattr(n2, "predict"):
                 with _to_pil(frames[0]).convert("RGB") as im:
                     with OpenNSFW2Engine._INFERENCE_LOCK:
@@ -264,6 +266,8 @@ except Exception as exc:
         if mode == "auto":
             in_process_result = self._predict_in_process(path, frames, start)
             if in_process_result.status == EngineStatus.ERROR:
-                return self._predict_in_subprocess(path, start)
+                engine_path = frames[0].compatible_file_path(path) if isinstance(frames[0], Frame) else path
+                return self._predict_in_subprocess(engine_path, start)
             return in_process_result
-        return self._predict_in_subprocess(path, start)
+        engine_path = frames[0].compatible_file_path(path) if isinstance(frames[0], Frame) else path
+        return self._predict_in_subprocess(engine_path, start)
