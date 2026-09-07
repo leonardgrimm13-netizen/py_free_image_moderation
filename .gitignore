@@ -56,7 +56,8 @@ wandb/
 # Local model storage
 models/*
 !models/.gitkeep
-!models/forbidden_symbols_yolo.pt
+!models/forbidden_symbols_yolo26s_GPU_0.1.pt
+!models/forbidden_symbols_yolo26s_CPU_0.1.onnx
 !models/yolov8s-oiv7.pt
 
 # Reports / generated output

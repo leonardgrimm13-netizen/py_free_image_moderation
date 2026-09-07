@@ -1,4 +1,5 @@
 include .env.example README.md README.de.md CHANGELOG.md CONTRIBUTING.md moderate_image.py requirements*.txt
-include models/forbidden_symbols_yolo.pt
+include models/forbidden_symbols_yolo26s_GPU_0.1.pt
+include models/forbidden_symbols_yolo26s_CPU_0.1.onnx
 include models/yolov8s-oiv7.pt
 recursive-include data *.txt

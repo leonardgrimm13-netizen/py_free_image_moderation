@@ -126,14 +126,7 @@ def _apply_forbidden_symbols(r: EngineResult, state: _VerdictState) -> None:
     scores = r.scores or {}
     details = r.details or {}
     max_conf = safe_float01(scores.get("forbidden_symbols_max_conf", 0.0))
-    block_conf = env_float("FORBIDDEN_SYMBOLS_YOLO_BLOCK_CONF", 0.90, min_value=0.0, max_value=1.0)
-    review_conf = env_float("FORBIDDEN_SYMBOLS_YOLO_REVIEW_CONF", 0.30, min_value=0.0, max_value=1.0)
-    label_block_conf = env_label_float_map("FORBIDDEN_SYMBOLS_YOLO_LABEL_BLOCK_CONF")
-    label_review_conf = env_label_float_map("FORBIDDEN_SYMBOLS_YOLO_LABEL_REVIEW_CONF")
     top_label = str(details.get("top_label") or "").strip()
-
-    def _threshold_for_label(label: str, default: float, overrides: dict[str, float]) -> float:
-        return float(overrides.get(label.strip().lower(), default))
 
     def _trigger_details(key: str) -> tuple[str, float]:
         detection = details.get(key)
@@ -143,17 +136,26 @@ def _apply_forbidden_symbols(r: EngineResult, state: _VerdictState) -> None:
             return label, confidence
         return top_label, max_conf
 
-    block_hit = safe_float01(scores.get("forbidden_symbols_block_hit", 0.0)) >= 1.0
-    review_hit = safe_float01(scores.get("forbidden_symbols_review_hit", 0.0)) >= 1.0
-    block_threshold = _threshold_for_label(top_label, block_conf, label_block_conf)
-    review_threshold = _threshold_for_label(top_label, review_conf, label_review_conf)
+    # New engine results contain authoritative policy decisions. Only legacy or
+    # hand-built results without both hit scores use the old max-confidence fallback.
+    has_policy_hits = "forbidden_symbols_block_hit" in scores and "forbidden_symbols_review_hit" in scores
+    if has_policy_hits:
+        block_hit = safe_float01(scores["forbidden_symbols_block_hit"]) >= 1.0
+        review_hit = safe_float01(scores["forbidden_symbols_review_hit"]) >= 1.0
+    else:
+        block_conf = env_float("FORBIDDEN_SYMBOLS_YOLO_BLOCK_CONF", 0.90, min_value=0.0, max_value=1.0)
+        review_conf = env_float("FORBIDDEN_SYMBOLS_YOLO_REVIEW_CONF", 0.30, min_value=0.0, max_value=1.0)
+        label_block_conf = env_label_float_map("FORBIDDEN_SYMBOLS_YOLO_LABEL_BLOCK_CONF")
+        label_review_conf = env_label_float_map("FORBIDDEN_SYMBOLS_YOLO_LABEL_REVIEW_CONF")
+        block_hit = max_conf >= float(label_block_conf.get(top_label.lower(), block_conf))
+        review_hit = max_conf >= float(label_review_conf.get(top_label.lower(), review_conf))
 
-    if block_hit or max_conf >= block_threshold:
+    if block_hit:
         label, confidence = _trigger_details("block_detection")
         label_part = f": {label}" if label else ""
         state.reasons.append(f"YOLO forbidden symbol detected{label_part} confidence={confidence:.2f}")
         state.hate = max(state.hate, 1.0)
-    elif review_hit or max_conf >= review_threshold:
+    elif review_hit:
         label, confidence = _trigger_details("review_detection")
         label_part = f": {label}" if label else ""
         state.reasons.append(f"YOLO possible forbidden symbol{label_part} confidence={confidence:.2f}")

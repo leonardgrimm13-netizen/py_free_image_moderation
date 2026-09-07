@@ -1,5 +1,8 @@
 # Changelog
 
+## Unreleased
+- Migrated the forbidden-symbol engine to the canonical bundled YOLO26s seven-class detector files (`forbidden_symbols_yolo26s_GPU_0.1.pt` and `forbidden_symbols_yolo26s_CPU_0.1.onnx`) with fixed 640px input, CUDA-aware PT/CPU-aware ONNX selection, strict model/output validation, fixed-batch-1 ONNX inference, shared normalized detections, and a single backend-independent moderation-policy pass. Both model files are included in wheel and sdist packaging.
+
 ## 0.2.0 - 2026-07-17
 - Added production AVIF support for local files, directory scans, public HTTP(S) URLs, uppercase/mixed-case suffixes, extensionless input, and AVIF content stored under unrelated suffixes. Detection validates the bounded leading ISO-BMFF `ftyp` box and explicit `avif`/`avis` major or compatible brands instead of trusting filenames, MIME types, or incidental text; generic HEIF/HEIC brands remain unsupported.
 - Raised the core requirement to `Pillow>=11.3.0` and added controlled loader errors for recognized AVIF when the active Pillow build has no working AVIF codec.

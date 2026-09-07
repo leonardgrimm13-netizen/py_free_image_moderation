@@ -8,7 +8,7 @@ from modimg.engines.yolo_weapons import YOLOWorldWeaponsEngine
 from modimg.types import Frame
 
 
-MISSING = {"nudenet", "opennsfw2", "open_nsfw2", "ultralytics", "pytesseract"}
+MISSING = {"nudenet", "opennsfw2", "open_nsfw2", "ultralytics", "onnxruntime", "pytesseract"}
 
 
 def test_missing_optional_libs_are_skipped(monkeypatch) -> None:

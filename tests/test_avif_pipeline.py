@@ -553,7 +553,7 @@ def test_real_frame_engines_use_rgb_frame_without_requesting_avif_path_fallback(
         assert isinstance(image, Image.Image)
         assert image.mode == "RGB"
         seen_yolo_images.append(image)
-        return []
+        return [SimpleNamespace(names=None, boxes=SimpleNamespace(cls=[], conf=[], xyxy=[]))]
 
     monkeypatch.setattr(yolo_weapons, "_resolve_model_reference", lambda: ("fake-weapons.pt", True, None))
     monkeypatch.setattr(yolo_weapons, "_load_model", lambda model_ref: SimpleNamespace(names={}))
