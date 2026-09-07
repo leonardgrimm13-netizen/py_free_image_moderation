@@ -28,7 +28,7 @@ Ein flexibles Python-Projekt zur **Bild-, GIF-, SVG- und AVIF-Moderation** mit m
   - `OpenNSFW2`
   - `NudeNet`
   - `YOLO Waffen-Erkennung` (lokale YOLO-Erkennung mit `models/yolov8s-oiv7.pt`)
-  - `YOLO forbidden symbols` (Lokale YOLO-Erkennung für verbotene/schädliche Symbole mit `models/forbidden_symbols_yolo.pt`)
+  - `YOLO forbidden symbols` (lokale YOLO26s-Erkennung mit PT/GPU- und ONNX/CPU-Modell)
   - `OpenAI Moderation` (optional per API-Key)
   - `Sightengine` (optional per API-Credentials)
 - **GIF-Handling** mit konfigurierbarem Frame-Sampling
@@ -48,7 +48,8 @@ py_free_image_moderation/
 ├── requirements_all.txt    # lokale + API-Runtime
 ├── requirements_dev.txt    # Tests/Lint/Build-Tools
 ├── models/
-│   ├── forbidden_symbols_yolo.pt  # gebündeltes lokales YOLO-Modell für verbotene Symbole
+│   ├── forbidden_symbols_yolo26s_GPU_0.1.pt   # CUDA-bevorzugter YOLO26s-Detektor
+│   ├── forbidden_symbols_yolo26s_CPU_0.1.onnx # portabler CPU-YOLO26s-Detektor
 │   └── yolov8s-oiv7.pt            # gebündeltes lokales YOLO-Modell für Waffen-Erkennung
 ├── data/
 │   ├── phash_allowlist.txt
@@ -120,6 +121,7 @@ Enthält die Basis-Abhängigkeiten plus lokale Vision/OCR-Engines:
 - `opennsfw2[tf-keras]`
 - `nudenet`
 - `ultralytics`
+- `onnxruntime`
 - `pytesseract`
 
 Damit funktioniert die lokale Pipeline inkl. OpenNSFW2, NudeNet, YOLO-Waffen, lokaler YOLO-Erkennung für verbotene/schädliche Symbole, OCR-Python-Bindings und `--no-apis`.
@@ -158,9 +160,9 @@ python -m pip install -r requirements_dev.txt
 Enthält die Basis-Abhängigkeiten plus `pytest`, `pytest-cov`, `ruff` und `build`.
 
 ### 4) Gebündelte lokale YOLO-Modelle
-Dieses Repository enthält `models/forbidden_symbols_yolo.pt` und `models/yolov8s-oiv7.pt` direkt als normale Repository-Dateien.
+Die Forbidden-Symbol-Engine verwendet einen Ultralytics-YOLO26s-**Objektdetektor** mit fester Inferenzgröße 640×640. Er kann null, eine oder mehrere Detections liefern. Das gebündelte `models/forbidden_symbols_yolo26s_GPU_0.1.pt` wird bei sichtbarem NVIDIA/CUDA bevorzugt. Das gebündelte FP32-Modell `models/forbidden_symbols_yolo26s_CPU_0.1.onnx` hat feste Batchgröße 1 und wird für portable CPU-Inferenz bevorzugt. CPU-ONNX benötigt das Extra `local`, `vision` oder `all` mit `onnxruntime`. Auto nutzt PT auf CUDA, ONNX auf CPU und PT auf CPU nur, wenn ONNX nicht verfügbar ist.
 
-Das Modell wird lokal von der Engine `YOLO forbidden symbols` geladen. Zur Laufzeit werden kein Roboflow und keine externe API verwendet. Falls die Datei fehlt, setze `FORBIDDEN_SYMBOLS_YOLO_MODEL` auf einen absoluten Pfad oder starte aus dem Projekt-Root. Falls Git-LFS nur eine Pointer-Datei statt echter Gewichte ausgecheckt hat, führe `git lfs pull` aus.
+Die kanonischen Klassen-IDs lauten `0 Identitare Bewegung`, `1 black_sun`, `2 confederate-flag`, `3 isis`, `4 siegrune`, `5 ss_skull` und `6 swastika`. Verfügbare Modellmetadaten werden strikt gegen dieses Mapping und Task `detect` geprüft. Beide Formate laufen über Ultralytics-Preprocessing, Letterboxing, Inferenz und `result.boxes`; es gibt weder Legacy-ONNX-Decoder noch zusätzliche NMS. Die Inferenz bleibt lokal und startet weder Roboflow/API-Aufrufe noch automatische Downloads. Fehlende Gewichte und Git-LFS-Pointer werden als nicht verfügbar gemeldet.
 
 Die separate Engine `YOLO-World weapons` verwendet standardmäßig das gebündelte `models/yolov8s-oiv7.pt`. Sowohl Source-Checkouts als auch installierte Wheels lösen gebündelte Ressourcen automatisch auf. Für eigene Waffen-Gewichte setze `YOLO_WEAPON_MODEL=/absoluter/oder/projektrelativer/pfad.pt` oder `YOLO_WORLD_MODEL=/absoluter/oder/projektrelativer/pfad.pt`.
 
@@ -353,7 +355,7 @@ pytest -q
 Local/Vision-Smoke-Test:
 ```bash
 python -m pip install -r requirements_local.txt
-python -c "import opennsfw2, nudenet, ultralytics, pytesseract"
+python -c "import onnxruntime, opennsfw2, nudenet, ultralytics, pytesseract"
 python -m pip check
 ```
 
@@ -437,22 +439,24 @@ YOLO_BATCH_ENABLE=1
 # OpenNSFW2 Speed/Stabilitaet
 OPENNSFW2_IN_PROCESS=0
 
-# Lokales YOLO-Modell für verbotene/schädliche Symbole
+# Lokaler YOLO26s-Detektor für verbotene/schädliche Symbole
 FORBIDDEN_SYMBOLS_YOLO_ENABLE=1
-FORBIDDEN_SYMBOLS_YOLO_MODEL=models/forbidden_symbols_yolo.pt
-FORBIDDEN_SYMBOLS_YOLO_CONF=0.20
+FORBIDDEN_SYMBOLS_YOLO_BACKEND=auto
+FORBIDDEN_SYMBOLS_YOLO_MODEL=
+FORBIDDEN_SYMBOLS_YOLO_PT_MODEL=models/forbidden_symbols_yolo26s_GPU_0.1.pt
+FORBIDDEN_SYMBOLS_YOLO_ONNX_MODEL=models/forbidden_symbols_yolo26s_CPU_0.1.onnx
+FORBIDDEN_SYMBOLS_YOLO_DEVICE=auto
+FORBIDDEN_SYMBOLS_YOLO_CONF=0.25
 FORBIDDEN_SYMBOLS_YOLO_IOU=0.45
-FORBIDDEN_SYMBOLS_YOLO_IMGSZ=960
+FORBIDDEN_SYMBOLS_YOLO_IMGSZ=640
 FORBIDDEN_SYMBOLS_YOLO_MAX_DET=20
 FORBIDDEN_SYMBOLS_YOLO_MAX_FRAMES=2
-FORBIDDEN_SYMBOLS_YOLO_DEVICE=auto
 FORBIDDEN_SYMBOLS_YOLO_BATCH_ENABLE=1
 FORBIDDEN_SYMBOLS_YOLO_STOP_AFTER_BLOCK=1
 FORBIDDEN_SYMBOLS_YOLO_REVIEW_CONF=0.30
 FORBIDDEN_SYMBOLS_YOLO_BLOCK_CONF=0.90
 FORBIDDEN_SYMBOLS_YOLO_LABEL_REVIEW_CONF=
 FORBIDDEN_SYMBOLS_YOLO_LABEL_BLOCK_CONF=
-FORBIDDEN_SYMBOLS_YOLO_INCLUDE_BOXES=1
 FORBIDDEN_SYMBOLS_YOLO_IGNORE_LABELS=
 ```
 
@@ -510,15 +514,25 @@ Speed-Tradeoffs:
 - Starte mit File-Workers `2` und Engine-Workers `4`, dann per Benchmark erhöhen.
 
 ### Lokale YOLO-Konfiguration für verbotene Symbole
-- `FORBIDDEN_SYMBOLS_YOLO_ENABLE=1` aktiviert standardmäßig das gebündelte lokale Modell.
-- `FORBIDDEN_SYMBOLS_YOLO_CONF=0.20` steuert die rohe YOLO-Erkennungs-Confidence.
+- `FORBIDDEN_SYMBOLS_YOLO_BACKEND=auto|pt|onnx` wählt das Format. `FORBIDDEN_SYMBOLS_YOLO_MODEL` bleibt ein höchstpriorisierter `.pt`-/`.onnx`-Override; sonst gelten die getrennten PT-/ONNX-Pfade.
+- `FORBIDDEN_SYMBOLS_YOLO_DEVICE=auto|cpu|0|cuda:0` steuert die Ausführung. Explizites CUDA wählt PT und wird bei verborgenem/fehlendem CUDA als nicht verfügbar gemeldet. ONNX ist hier CPU-only.
+- `CONF=0.25`, `IOU=0.45` und `MAX_DET=20` sind Modellparameter. `IMGSZ` muss `640` bleiben.
 - `FORBIDDEN_SYMBOLS_YOLO_REVIEW_CONF=0.30` steuert, ab wann Funde das Urteil auf `REVIEW` anheben.
 - `FORBIDDEN_SYMBOLS_YOLO_BLOCK_CONF=0.90` steuert, ab wann Funde das Urteil auf `BLOCK` anheben.
 - `FORBIDDEN_SYMBOLS_YOLO_LABEL_REVIEW_CONF` und `FORBIDDEN_SYMBOLS_YOLO_LABEL_BLOCK_CONF` überschreiben Schwellen pro Label, z. B. `swastika:0.50,isis:0.75`.
-- Empfohlene Defaults: `conf=0.20`, `review=0.30`, `block=0.90`, `imgsz=960`.
 - `FORBIDDEN_SYMBOLS_YOLO_MAX_FRAMES<=0` deaktiviert die Frame-Inferenz dieser Engine und liefert `skipped`; dies zählt nicht als erfolgreicher Moderationscheck.
-- Für schnellere CPU-only-Scans: Fast-Preset plus `OCR_MAX_FRAMES=1`, `YOLO_IMGSZ=416`, `YOLO_DEVICE=cpu`, `FORBIDDEN_SYMBOLS_YOLO_IMGSZ=640` und `FORBIDDEN_SYMBOLS_YOLO_DEVICE=cpu`.
-- Unzuverlässige Klassen können zur Laufzeit ignoriert werden, z. B. `FORBIDDEN_SYMBOLS_YOLO_IGNORE_LABELS=communism,antifa`.
+- PT darf ausgewählte Frames bündeln; ONNX verarbeitet wegen Batchgröße 1 immer sequenziell.
+- `STOP_AFTER_BLOCK` greift bei sequenzieller PT-/ONNX-Verarbeitung erst nach Normalisierung und Policy-Auswertung; ein bereits gestarteter PT-Batch kann nicht vorzeitig stoppen.
+- Modelle werden nach aufgelöstem Pfad, Backend und Device gecacht und gelten während der Prozesslaufzeit als unveränderlich. Nach Austausch einer Modelldatei ist der Prozess neu zu starten.
+- Ignore-Labels sind reine Policy: Detections bleiben in `details.detections`, lösen aber kein Review/Block aus. Unbekannte Ignore-Labels sind harmlos und wirkungslos.
+
+Detection-Confidence ist kein Moderationsurteil. Die Inferenz erzeugt zuerst für PT und ONNX dieselbe vollständige Detection-Liste; danach prüft die Application Policy jede Detection samt klassenspezifischer Schwellen. Beispiel mit Originalbildkoordinaten:
+
+```json
+{"frame_idx": 0, "class_id": 6, "label": "swastika", "confidence": 0.91, "bbox_xyxy": [100.0, 80.0, 340.0, 310.0], "bbox_norm_xyxy": [0.1, 0.1, 0.34, 0.3875], "area_ratio": 0.069, "image_size": [1000, 800]}
+```
+
+Null Detections sind ein erfolgreiches `OK`-Engine-Ergebnis mit leerer Liste und Null-Scores.
 
 ---
 

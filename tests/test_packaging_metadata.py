@@ -7,6 +7,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 CORE_SVG_DEPENDENCIES = {"resvg_py>=0.3,<1.0", "defusedxml>=0.7.1,<1.0"}
 PILLOW_AVIF_REQUIREMENT = "Pillow>=11.3.0"
+ULTRALYTICS_REQUIREMENT = "ultralytics>=8.4.0,<9"
+ONNXRUNTIME_REQUIREMENT = "onnxruntime>=1.19,<2"
+FORBIDDEN_SYMBOL_MODELS = {
+    "models/forbidden_symbols_yolo26s_GPU_0.1.pt",
+    "models/forbidden_symbols_yolo26s_CPU_0.1.onnx",
+}
 
 
 def test_sdist_manifest_includes_env_example() -> None:
@@ -69,3 +75,26 @@ def test_every_derived_requirement_set_inherits_core_avif_support() -> None:
 
     all_requirements = (ROOT / "requirements_all.txt").read_text(encoding="utf-8").splitlines()
     assert "-r requirements_local.txt" in all_requirements
+
+
+def test_yolo26_local_dependencies_are_consistent() -> None:
+    metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    local = set(metadata["project"]["optional-dependencies"]["local"])
+    vision = set(metadata["project"]["optional-dependencies"]["vision"])
+    all_extra = set(metadata["project"]["optional-dependencies"]["all"])
+    requirements = set((ROOT / "requirements_local.txt").read_text(encoding="utf-8").splitlines())
+    expected = {ULTRALYTICS_REQUIREMENT, ONNXRUNTIME_REQUIREMENT}
+    assert expected <= local
+    assert expected <= vision
+    assert expected <= all_extra
+    assert expected <= requirements
+
+
+def test_canonical_forbidden_symbol_models_are_packaged() -> None:
+    metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    package_models = set(metadata["tool"]["setuptools"]["data-files"]["models"])
+    manifest = (ROOT / "MANIFEST.in").read_text(encoding="utf-8")
+    assert all((ROOT / path).is_file() for path in FORBIDDEN_SYMBOL_MODELS)
+    assert FORBIDDEN_SYMBOL_MODELS <= package_models
+    assert all(path in manifest for path in FORBIDDEN_SYMBOL_MODELS)
+    assert "models/forbidden_symbols_yolo.pt" not in package_models

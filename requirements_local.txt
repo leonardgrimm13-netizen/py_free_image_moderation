@@ -5,5 +5,6 @@
 # TensorFlow Keras path, which is the default supported local install here.
 opennsfw2[tf-keras]>=0.18.0,<0.19
 nudenet>=3.4.2,<4
-ultralytics>=8.3.0,<9
+ultralytics>=8.4.0,<9
+onnxruntime>=1.19,<2
 pytesseract>=0.3.10

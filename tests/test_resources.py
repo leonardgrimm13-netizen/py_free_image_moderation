@@ -30,7 +30,7 @@ def test_missing_bundled_resource_never_falls_back_to_cwd(monkeypatch, tmp_path)
     source = tmp_path / "source"
     install = tmp_path / "install"
     cwd = tmp_path / "cwd"
-    relative = "models/forbidden_symbols_yolo.pt"
+    relative = "models/forbidden_symbols_yolo26s_GPU_0.1.pt"
     source.mkdir()
     install.mkdir()
     (cwd / relative).parent.mkdir(parents=True)

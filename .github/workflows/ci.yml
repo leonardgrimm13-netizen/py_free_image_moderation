@@ -95,7 +95,7 @@ jobs:
           python -m pip install -e ".[local,dev]"
 
       - name: Import local optional engines
-        run: python -c "import opennsfw2, nudenet, ultralytics, pytesseract"
+        run: python -c "import onnxruntime, opennsfw2, nudenet, ultralytics, pytesseract"
 
       - name: Compile
         run: python -m compileall -q .
