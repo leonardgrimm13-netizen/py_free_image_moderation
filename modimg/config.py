@@ -51,9 +51,15 @@ def load_dotenv(path: str, *, override: bool | None = None) -> list[str]:
                 if not parsed:
                     continue
                 k, v = parsed
-                if (not override) and (k in os.environ):
+                try:
+                    if (not override) and (k in os.environ):
+                        continue
+                    os.environ[k] = v
+                except (OSError, ValueError):
+                    # Platform environment implementations reject malformed
+                    # names (for example embedded NULs). One bad line must not
+                    # prevent later valid configuration from being loaded.
                     continue
-                os.environ[k] = v
                 loaded.append(k)
     except OSError:
         return loaded
@@ -170,6 +176,10 @@ os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 # can set CUDA_VISIBLE_DEVICES explicitly in the shell or .env.
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", "-1")
 os.environ.setdefault("MPLCONFIGDIR", os.path.join(tempfile.gettempdir(), "modimg-matplotlib"))
+# Ultralytics initializes its settings during import. Keep that optional
+# dependency from writing under a user's home directory (or failing in a
+# read-only container); callers may still provide their own directory.
+os.environ.setdefault("YOLO_CONFIG_DIR", os.path.join(tempfile.gettempdir(), "modimg-ultralytics"))
 
 
 def project_root() -> str:

@@ -1,6 +1,7 @@
 """Perceptual hash helpers + allow/block list management."""
 from __future__ import annotations
 
+import math
 import os
 import re
 import threading
@@ -27,12 +28,18 @@ _PHASH_CACHE_LOCK = threading.RLock()
 _HEX_RE = re.compile(r"^[0-9a-f]+$")
 
 
-def _optional_imagehash_phash(img: Image.Image) -> Optional[str]:
-    """Use ImageHash when possible; its pure-numpy fallback remains authoritative."""
+def _optional_imagehash_phash(img: Image.Image, hash_size: int, highfreq_factor: int) -> Optional[str]:
+    """Use ImageHash when possible, with a local fallback for unavailable installs."""
     if _imagehash is None:
         return None
     try:
-        return str(_imagehash.phash(img)).lower()
+        return str(
+            _imagehash.phash(
+                img,
+                hash_size=hash_size,
+                highfreq_factor=highfreq_factor,
+            )
+        ).lower()
     except Exception:
         # Optional ImageHash versions can reject Pillow modes accepted by the
         # built-in implementation. Falling back keeps pHash available offline.
@@ -123,20 +130,63 @@ def _dct_matrix(n: int) -> np.ndarray:
         m = _PHASH_DCT_CACHE.get(n)
         if m is not None:
             return m
-    x = np.arange(n, dtype=np.float32)
+    x = np.arange(n, dtype=np.float64)
     k = x.reshape((n, 1))
-    mat = np.cos((np.pi * (2.0 * x + 1.0) * k) / (2.0 * n)).astype(np.float32)
-    mat[0, :] *= (1.0 / np.sqrt(n))
-    mat[1:, :] *= (np.sqrt(2.0 / n))
+    # Match scipy.fftpack.dct(type=2, norm=None), which ImageHash uses.
+    # Its scale is irrelevant to the median comparison, but matching it keeps
+    # fallback hashes identical to the regular ImageHash implementation.
+    mat = 2.0 * np.cos((np.pi * (2.0 * x + 1.0) * k) / (2.0 * n))
     with _PHASH_CACHE_LOCK:
         cached = _PHASH_DCT_CACHE.get(n)
         if cached is not None:
             return cached
         _PHASH_DCT_CACHE[n] = mat
-        return mat
+    return mat
+
+
+def _phash_dct(pixels: np.ndarray) -> np.ndarray:
+    """Use ImageHash's SciPy DCT when available, with a NumPy fallback.
+
+    ImageHash depends on SciPy and uses ``scipy.fftpack.dct``. Reusing that
+    implementation avoids pHash changes at close median boundaries when the
+    optional ImageHash import itself failed. The NumPy path preserves graceful
+    operation in deliberately minimal installations.
+    """
+    try:
+        from scipy.fftpack import dct
+
+        return dct(dct(pixels, axis=0), axis=1)
+    except (ImportError, ModuleNotFoundError):
+        pass
+
+    n = pixels.shape[0]
+    matrix = _dct_matrix(n)
+    # Centering leaves every AC coefficient unchanged while reducing floating
+    # point noise for constant images. Restore the unnormalized DC coefficient
+    # used by scipy's default type-II DCT.
+    centered = pixels - float(np.mean(pixels))
+    transformed = matrix @ centered @ matrix.T
+    transformed[0, 0] = 4.0 * float(np.sum(pixels))
+    return transformed
+
 
 def phash_hex_from_pil(img: Image.Image, hash_size: int = 8, highfreq_factor: int = 4) -> str:
-    imagehash_result = _optional_imagehash_phash(img)
+    def _positive_integer(value: object, name: str, minimum: int) -> int:
+        if isinstance(value, bool):
+            raise ValueError(f"{name} must be an integer greater than or equal to {minimum}")
+        try:
+            integer = int(value)
+            numeric = float(value)
+        except Exception as exc:
+            raise ValueError(f"{name} must be an integer greater than or equal to {minimum}") from exc
+        if not math.isfinite(numeric) or numeric != integer or integer < minimum:
+            raise ValueError(f"{name} must be an integer greater than or equal to {minimum}")
+        return integer
+
+    hash_size = _positive_integer(hash_size, "hash_size", 2)
+    highfreq_factor = _positive_integer(highfreq_factor, "highfreq_factor", 1)
+
+    imagehash_result = _optional_imagehash_phash(img, hash_size, highfreq_factor)
     if imagehash_result is not None:
         return imagehash_result
     size = int(hash_size) * int(highfreq_factor)
@@ -146,17 +196,14 @@ def phash_hex_from_pil(img: Image.Image, hash_size: int = 8, highfreq_factor: in
         resample = Image.LANCZOS  # type: ignore[attr-defined]
     with img.convert("L") as grayscale:
         with grayscale.resize((size, size), resample=resample) as resized:
-            pixels = np.array(resized, dtype=np.float32, copy=True)
-    n = pixels.shape[0]
-    C = _dct_matrix(n)
-    dct = C @ pixels @ C.T
-    dctlow = dct[:hash_size, :hash_size]
-    med = float(np.median(dctlow[1:, :])) if hash_size > 1 else float(np.median(dctlow))
+            pixels = np.array(resized, dtype=np.float64, copy=True)
+    dctlow = _phash_dct(pixels)[:hash_size, :hash_size]
+    med = float(np.median(dctlow))
     bits = (dctlow > med).flatten()
     val = 0
     for b in bits:
         val = (val << 1) | int(bool(b))
-    width = (hash_size * hash_size) // 4
+    width = (hash_size * hash_size + 3) // 4
     return f"{val:0{width}x}"
 
 def frame_phash_hex_int(frame: object) -> Tuple[str, int]:

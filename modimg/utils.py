@@ -131,16 +131,25 @@ def status_value(status: Any) -> str:
 def safe_float01(v: Any, default: float = 0.0) -> float:
     """Convert to float in [0,1]. NaN/inf/invalid -> default."""
     try:
+        fallback = float(default)
+    except Exception:
+        fallback = 0.0
+    if not math.isfinite(fallback):
+        fallback = 0.0
+    fallback = min(1.0, max(0.0, fallback))
+    if isinstance(v, bool):
+        return fallback
+    try:
         f = float(v)
         if not math.isfinite(f):
-            return float(default)
+            return fallback
         if f < 0.0:
             return 0.0
         if f > 1.0:
             return 1.0
         return f
     except Exception:
-        return float(default)
+        return fallback
 
 def is_url(s: str) -> bool:
     try:
@@ -676,40 +685,59 @@ def json_safe(value: Any) -> Any:
     values/arrays, or bytes from optional dependencies. Keep the report useful
     without allowing one non-serializable detail to crash the CLI.
     """
-    from dataclasses import asdict, is_dataclass
+    return _json_safe(value, set())
+
+
+def _json_safe(value: Any, active_ids: set[int]) -> Any:
+    """Normalize a value while replacing active reference cycles safely."""
+    from dataclasses import fields, is_dataclass
     from pathlib import Path
 
     if value is None or isinstance(value, (str, int, bool)):
         return value
     if isinstance(value, float):
         return value if math.isfinite(value) else None
-    if hasattr(value, "value"):
-        return json_safe(value.value)
     if isinstance(value, Path):
         return str(value)
     if isinstance(value, bytes):
         return f"<bytes:{len(value)}>"
-    if is_dataclass(value):
-        return json_safe(asdict(value))
-    if isinstance(value, dict):
-        return {str(json_safe(k)): json_safe(v) for k, v in value.items()}
-    if isinstance(value, (set, frozenset)):
-        return [json_safe(v) for v in sorted(value, key=repr)]
-    if isinstance(value, (list, tuple)):
-        return [json_safe(v) for v in value]
-    if hasattr(value, "item"):
-        converted = _best_effort_json_conversion(value, "item")
-        if converted is not _JSON_CONVERSION_FAILED:
-            return json_safe(converted)
-    if hasattr(value, "tolist"):
-        converted = _best_effort_json_conversion(value, "tolist")
-        if converted is not _JSON_CONVERSION_FAILED:
-            return json_safe(converted)
+    value_id = id(value)
+    if value_id in active_ids:
+        return "<recursive>"
+
+    active_ids.add(value_id)
     try:
-        json.dumps(value)
-        return value
-    except Exception:
-        return str(value)
+        if hasattr(value, "value"):
+            return _json_safe(value.value, active_ids)
+        if is_dataclass(value) and not isinstance(value, type):
+            return {field.name: _json_safe(getattr(value, field.name), active_ids) for field in fields(value)}
+        if isinstance(value, dict):
+            return {
+                str(_json_safe(key, active_ids)): _json_safe(item, active_ids)
+                for key, item in value.items()
+            }
+        if isinstance(value, (set, frozenset)):
+            return [_json_safe(item, active_ids) for item in sorted(value, key=repr)]
+        if isinstance(value, (list, tuple)):
+            return [_json_safe(item, active_ids) for item in value]
+        if hasattr(value, "item"):
+            converted = _best_effort_json_conversion(value, "item")
+            if converted is not _JSON_CONVERSION_FAILED:
+                return _json_safe(converted, active_ids)
+        if hasattr(value, "tolist"):
+            converted = _best_effort_json_conversion(value, "tolist")
+            if converted is not _JSON_CONVERSION_FAILED:
+                return _json_safe(converted, active_ids)
+        try:
+            json.dumps(value)
+            return value
+        except Exception:
+            try:
+                return str(value)
+            except Exception:
+                return f"<unserializable:{type(value).__name__}>"
+    finally:
+        active_ids.remove(value_id)
 
 
 def json_dumps_safe(value: Any, **kwargs: Any) -> str:

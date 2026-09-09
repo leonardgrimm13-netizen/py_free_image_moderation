@@ -5,16 +5,75 @@ import threading
 
 from PIL import Image
 
+import modimg.phash as phash_module
 from modimg.engines.phash_allow import PHashAllowlistEngine
 from modimg.engines.phash_block import PHashBlocklistEngine
 from modimg.enums import EngineStatus, VerdictLabel
-from modimg.phash import append_phash_to_allowlist, frame_phash_hex_int, load_phash_exact_map, load_phash_list, resolve_list_path
+from modimg.phash import (
+    append_phash_to_allowlist,
+    frame_phash_hex_int,
+    load_phash_exact_map,
+    load_phash_list,
+    phash_hex_from_pil,
+    resolve_list_path,
+)
 from modimg.types import Frame
 from modimg.verdict import compute_verdict
 
 
 def _frame() -> Frame:
     return Frame(idx=0, pil=Image.new("RGB", (16, 16), color=(1, 2, 3)))
+
+
+def test_phash_honors_custom_hash_parameters() -> None:
+    import imagehash
+
+    image = Image.new("RGB", (17, 19), color=(1, 2, 3))
+
+    actual = phash_hex_from_pil(image, hash_size=4, highfreq_factor=2)
+
+    assert actual == str(imagehash.phash(image, hash_size=4, highfreq_factor=2))
+    assert len(actual) == 4
+
+
+def test_phash_rejects_invalid_dimensions() -> None:
+    image = Image.new("RGB", (2, 2))
+
+    for hash_size, highfreq_factor in ((1, 4), (8, 0), (2.5, 4), (True, 4)):
+        try:
+            phash_hex_from_pil(image, hash_size=hash_size, highfreq_factor=highfreq_factor)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("invalid pHash dimensions must be rejected")
+
+
+def test_phash_fallback_matches_imagehash_at_close_median_boundary(monkeypatch) -> None:
+    import imagehash
+
+    image = Image.new("L", (2, 2))
+    image.putdata([128, 129, 128, 129])
+    expected = {
+        (2, 1): str(imagehash.phash(image, hash_size=2, highfreq_factor=1)),
+        (3, 2): str(imagehash.phash(image, hash_size=3, highfreq_factor=2)),
+        (8, 4): str(imagehash.phash(image, hash_size=8, highfreq_factor=4)),
+    }
+    monkeypatch.setattr(phash_module, "_imagehash", None)
+
+    for parameters, expected_hash in expected.items():
+        actual = phash_hex_from_pil(image, *parameters)
+        assert actual == expected_hash
+        assert len(actual) == (parameters[0] ** 2 + 3) // 4
+
+
+def test_phash_fallback_is_stable_for_constant_images(monkeypatch) -> None:
+    import imagehash
+
+    image = Image.new("RGB", (17, 19), color=(255, 255, 255))
+    expected = str(imagehash.phash(image))
+    monkeypatch.setattr(phash_module, "_imagehash", None)
+
+    assert phash_hex_from_pil(image) == expected
 
 
 def test_phash_allowlist_match_returns_ok_verdict(tmp_path) -> None:
