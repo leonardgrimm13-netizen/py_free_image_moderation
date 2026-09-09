@@ -103,5 +103,17 @@ jobs:
       - name: Test without heavy inference
         run: pytest -q
 
+      - name: Real forbidden-symbols ONNX smoke
+        env:
+          RUN_REAL_MODEL_SMOKE: "1"
+          FORBIDDEN_SYMBOLS_YOLO_ENABLE: "1"
+          FORBIDDEN_SYMBOLS_YOLO_BACKEND: "onnx"
+          FORBIDDEN_SYMBOLS_YOLO_DEVICE: "cpu"
+          FORBIDDEN_SYMBOLS_YOLO_MAX_FRAMES: "1"
+          FORBIDDEN_SYMBOLS_YOLO_BATCH_ENABLE: "0"
+          CUDA_VISIBLE_DEVICES: "-1"
+          YOLO_CONFIG_DIR: ${{ runner.temp }}/modimg-ultralytics
+        run: pytest -q tests/test_forbidden_symbols_yolo_real.py
+
       - name: Check installed packages
         run: python -m pip check

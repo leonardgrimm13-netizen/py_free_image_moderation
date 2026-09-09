@@ -180,12 +180,6 @@ os.environ.setdefault("MPLCONFIGDIR", os.path.join(tempfile.gettempdir(), "modim
 # dependency from writing under a user's home directory (or failing in a
 # read-only container); callers may still provide their own directory.
 os.environ.setdefault("YOLO_CONFIG_DIR", os.path.join(tempfile.gettempdir(), "modimg-ultralytics"))
-try:
-    Path(os.environ["YOLO_CONFIG_DIR"]).expanduser().mkdir(parents=True, exist_ok=True)
-except OSError:
-    # Let Ultralytics apply its own writable-directory fallback when a caller
-    # deliberately configured an inaccessible location.
-    pass
 
 
 def project_root() -> str:
