@@ -152,6 +152,19 @@ def test_sightengine_rejects_non_finite_only_scores(monkeypatch) -> None:
     assert result.status == EngineStatus.ERROR
 
 
+def test_sightengine_rejects_boolean_scores(monkeypatch) -> None:
+    monkeypatch.setenv("SIGHTENGINE_USER", "user")
+    monkeypatch.setenv("SIGHTENGINE_SECRET", "secret")
+    response = FakeResponse(200, data={"status": "success", "offensive": True})
+    monkeypatch.setitem(sys.modules, "requests", types.SimpleNamespace(post=lambda *args, **kwargs: response))
+
+    result = SightengineEngine().run("dummy.png", _frame())
+
+    assert result.status == EngineStatus.ERROR
+    assert "no recognized moderation scores" in (result.error or "")
+    assert response.closed is True
+
+
 def test_sightengine_clamps_scores_to_probability_range(monkeypatch) -> None:
     monkeypatch.setenv("SIGHTENGINE_USER", "user")
     monkeypatch.setenv("SIGHTENGINE_SECRET", "secret")

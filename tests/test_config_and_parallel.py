@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
+import tempfile
 import types
 
 from PIL import Image
 
-from modimg.config import get_config
+from modimg.config import get_config, load_dotenv
 from modimg.pipeline import maybe_auto_learn, run_engines
 from modimg.types import Engine, EngineResult
 from modimg.verdict import compute_verdict, pick_file_dialog, pick_folder_dialog
@@ -94,6 +96,39 @@ def test_get_config_disable_flag_parsing(monkeypatch) -> None:
     monkeypatch.setenv("OPENNSFW2_DISABLE", "1")
     cfg = get_config(reload=True)
     assert cfg.opennsfw2_disable is True
+
+
+def test_import_config_sets_a_writable_ultralytics_config_default() -> None:
+    env = os.environ.copy()
+    env.pop("YOLO_CONFIG_DIR", None)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import os; import modimg.config; print(os.environ['YOLO_CONFIG_DIR'])",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=env,
+    )
+
+    assert result.stdout.strip() == os.path.join(tempfile.gettempdir(), "modimg-ultralytics")
+
+
+def test_dotenv_skips_invalid_environment_names_and_continues(monkeypatch, tmp_path) -> None:
+    dotenv = tmp_path / ".env"
+    dotenv.write_bytes(b"MODIMG_VALID_BEFORE=one\nBAD\x00NAME=value\nMODIMG_VALID_AFTER=two\n")
+    monkeypatch.delenv("MODIMG_VALID_BEFORE", raising=False)
+    monkeypatch.delenv("MODIMG_VALID_AFTER", raising=False)
+
+    loaded = load_dotenv(str(dotenv))
+
+    assert loaded == ["MODIMG_VALID_BEFORE", "MODIMG_VALID_AFTER"]
+    assert os.environ["MODIMG_VALID_BEFORE"] == "one"
+    assert os.environ["MODIMG_VALID_AFTER"] == "two"
 
 
 def test_run_engines_parallel_preserves_order(monkeypatch) -> None:
@@ -400,9 +435,43 @@ def test_json_safe_handles_paths_numpy_and_non_finite_values(tmp_path) -> None:
     assert math.isclose(normalized["np_float"], 0.25, rel_tol=1e-6)
 
 
+def test_json_safe_replaces_recursive_engine_details() -> None:
+    from modimg.utils import json_dumps_safe, json_safe
+
+    details: list[object] = []
+    details.append(details)
+
+    assert json_safe(details) == ["<recursive>"]
+    assert json_dumps_safe(details) == '["<recursive>"]'
+
+
+def test_json_safe_handles_an_object_with_a_failing_string_conversion() -> None:
+    from modimg.utils import json_safe
+
+    class BrokenRepresentation:
+        def __str__(self) -> str:
+            raise RuntimeError("cannot stringify")
+
+    assert json_safe(BrokenRepresentation()) == "<unserializable:BrokenRepresentation>"
+
+
 def test_parse_label_float_map_ignores_invalid_values() -> None:
     from modimg.utils import parse_label_float_map
 
     parsed = parse_label_float_map("isis:0.75, broken, swastika:1.4, bad:nan, antifa:-1")
 
     assert parsed == {"isis": 0.75, "swastika": 1.0, "antifa": 0.0}
+
+
+def test_safe_float01_rejects_booleans_and_normalizes_invalid_defaults() -> None:
+    from modimg.utils import safe_float01
+
+    class BrokenFloat:
+        def __float__(self) -> float:
+            raise RuntimeError("cannot convert")
+
+    assert safe_float01(True, default=0.2) == 0.2
+    assert safe_float01(False, default=0.2) == 0.2
+    assert safe_float01("not-a-number", default=float("nan")) == 0.0
+    assert safe_float01("not-a-number", default=2.0) == 1.0
+    assert safe_float01(BrokenFloat(), default=0.2) == 0.2

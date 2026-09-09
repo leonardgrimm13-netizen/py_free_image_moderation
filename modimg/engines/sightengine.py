@@ -150,10 +150,18 @@ class SightengineEngine(Engine):
             scores: Dict[str, float] = {}
 
             def _finite_number(value: Any) -> float | None:
-                if not isinstance(value, (int, float)):
+                # ``bool`` is an ``int`` subclass in Python but is not a
+                # valid probability from the external API.
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
                     return None
                 parsed = float(value)
                 return parsed if math.isfinite(parsed) else None
+
+            def _record_score(key: str, value: Any) -> float | None:
+                parsed = _finite_number(value)
+                if parsed is not None:
+                    scores[key] = parsed
+                return parsed
 
             # Total operations used (Sightengine sometimes counts per-model operations)
             ops = data.get("operations")
@@ -170,14 +178,13 @@ class SightengineEngine(Engine):
             # Nudity: supports both legacy schema (raw/partial/safe) and advanced nudity-2.1 (intensity + suggestive classes)
             nud = _pick_model("nudity", "nudity-2.1", "nudity_2_1")
             if isinstance(nud, dict):
-                legacy_found = False
+                legacy_schema = False
                 for kk in ("raw", "partial", "safe"):
-                    vv = nud.get(kk)
-                    if isinstance(vv, (int, float)):
-                        scores[f"nudity_{kk}"] = float(vv)
-                        legacy_found = True
+                    if kk in nud:
+                        legacy_schema = True
+                        _record_score(f"nudity_{kk}", nud[kk])
 
-                if not legacy_found:
+                if not legacy_schema:
                     def _num(v: Any) -> float:
                         parsed = _finite_number(v)
                         return safe_float01(parsed) if parsed is not None else 0.0
@@ -197,11 +204,10 @@ class SightengineEngine(Engine):
                                 # Skip safe/non-suggestive labels often present in nested structures
                                 if kl in {"none", "safe", "neutral", "other", "non_suggestive", "normal", "ok", "no_nudity", "non_nudity", "clothed", "fully_clothed", "covered", "not_nude", "nonnude"}:
                                     continue
-                                if isinstance(vv, (int, float)):
-                                    val = _finite_number(vv)
-                                    if val is not None and val > sugg_max:
-                                        sugg_max = safe_float01(val)
-                                else:
+                                val = _finite_number(vv)
+                                if val is not None and val > sugg_max:
+                                    sugg_max = safe_float01(val)
+                                elif not isinstance(vv, (int, float, bool)):
                                     _walk_max(vv)
                         elif isinstance(obj, (list, tuple)):
                             for vv in obj:
@@ -230,77 +236,73 @@ class SightengineEngine(Engine):
                 classes = wpn.get("classes")
                 if isinstance(classes, dict):
                     for kk, vv in classes.items():
-                        if isinstance(vv, (int, float)):
-                            scores[f"weapon_{kk}"] = float(vv)
+                        _record_score(f"weapon_{kk}", vv)
 
                 # some responses put scores directly under weapon.*
                 for kk in ("firearm", "knife", "firearm_toy", "firearm_gesture"):
                     vv = wpn.get(kk)
-                    if isinstance(vv, (int, float)):
-                        scores[f"weapon_{kk}"] = float(vv)
+                    _record_score(f"weapon_{kk}", vv)
 
                 ft = wpn.get("firearm_type")
                 if isinstance(ft, dict):
                     for kk, vv in ft.items():
-                        if isinstance(vv, (int, float)):
-                            scores[f"weapon_firearm_type_{kk}"] = float(vv)
+                        _record_score(f"weapon_firearm_type_{kk}", vv)
 
                 fa = wpn.get("firearm_action") or wpn.get("firearm_gesture")  # some variants
                 if isinstance(fa, dict):
                     for kk, vv in fa.items():
-                        if isinstance(vv, (int, float)):
-                            scores[f"weapon_firearm_action_{kk}"] = float(vv)
+                        _record_score(f"weapon_firearm_action_{kk}", vv)
 
             def _parse_prob_classes(model_obj: Any, prefix: str) -> None:
-                if isinstance(model_obj, (int, float)):
+                if _record_score(f"{prefix}_prob", model_obj) is not None:
                     # Some older/alternate schemas return a single float
-                    scores[f"{prefix}_prob"] = float(model_obj)
                     return
                 if not isinstance(model_obj, dict):
                     return
 
                 prob = model_obj.get("prob")
-                if isinstance(prob, (int, float)):
-                    scores[f"{prefix}_prob"] = float(prob)
+                _record_score(f"{prefix}_prob", prob)
 
                 # Newer schemas: {prefix: {classes: {...}}}
                 classes = model_obj.get("classes")
                 if isinstance(classes, dict):
                     for kk, vv in classes.items():
-                        if isinstance(vv, (int, float)):
-                            scores[f"{prefix}_{kk}"] = float(vv)
+                        _record_score(f"{prefix}_{kk}", vv)
 
                 # Some schemas flatten class scores at the top-level
                 for kk, vv in model_obj.items():
                     if kk in ("prob", "classes"):
                         continue
-                    if isinstance(vv, (int, float)):
-                        scores[f"{prefix}_{kk}"] = float(vv)
+                    _record_score(f"{prefix}_{kk}", vv)
 
             _parse_prob_classes(_pick_model("gore", "gore-2.0", "gore_2_0"), "gore")
             _parse_prob_classes(_pick_model("violence", "violence-2.0", "violence_2_0"), "violence")
 
             # Offensive: we also compute a stable offensive_max for downstream logic
             off = _pick_model("offensive", "offensive-2.0", "offensive_2_0")
-            if isinstance(off, (int, float)):
-                scores["offensive_max"] = float(off)
+            off_score = _finite_number(off)
+            if off_score is not None:
+                scores["offensive_max"] = off_score
             elif isinstance(off, dict):
                 _parse_prob_classes(off, "offensive")
                 vals = []
                 prob = off.get("prob")
-                if isinstance(prob, (int, float)):
-                    vals.append(float(prob))
+                parsed_prob = _finite_number(prob)
+                if parsed_prob is not None:
+                    vals.append(parsed_prob)
                 classes = off.get("classes")
                 if isinstance(classes, dict):
                     for vv in classes.values():
-                        if isinstance(vv, (int, float)):
-                            vals.append(float(vv))
+                        parsed_value = _finite_number(vv)
+                        if parsed_value is not None:
+                            vals.append(parsed_value)
                 # Fallback: any numeric top-level fields
                 for kk, vv in off.items():
                     if kk in ("prob", "classes"):
                         continue
-                    if isinstance(vv, (int, float)):
-                        vals.append(float(vv))
+                    parsed_value = _finite_number(vv)
+                    if parsed_value is not None:
+                        vals.append(parsed_value)
                 if vals:
                     scores["offensive_max"] = float(max(vals))
 
