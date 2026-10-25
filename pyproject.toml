@@ -11,7 +11,7 @@ requires-python = ">=3.11,<3.13"
 authors = [{ name = "py_free_image_moderation maintainers" }]
 license = "LicenseRef-Proprietary"
 dependencies = [
-  "Pillow>=11.3.0",
+  "Pillow>=13.0.0",
   "numpy>=1.26.0,<2.3",
   "ImageHash>=4.3.1",
   "resvg_py>=0.3,<1.0",

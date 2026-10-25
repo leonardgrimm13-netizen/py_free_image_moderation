@@ -1,14 +1,40 @@
 """Raster image frame loading and sampling, including GIF/WebP/AVIF sequences."""
 from __future__ import annotations
 
+from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path
+from threading import Lock
 import warnings
 
 from PIL import Image, features
 
 from .types import Frame
 from .utils import _IMAGE_SNIFF_BYTES, _sniff_image, env_int
+
+
+_pillow_warning_lock = Lock()
+_pillow_warning_users = 0
+_pillow_warning_context = None
+
+
+@contextmanager
+def _pillow_warning_errors():
+    """Keep one global filter scope alive until all concurrent Pillow reads finish."""
+    global _pillow_warning_users, _pillow_warning_context
+    with _pillow_warning_lock:
+        if _pillow_warning_users == 0:
+            _pillow_warning_context = warnings.catch_warnings(action="error", category=Image.DecompressionBombWarning)
+            _pillow_warning_context.__enter__()
+        _pillow_warning_users += 1
+    try:
+        yield
+    finally:
+        with _pillow_warning_lock:
+            _pillow_warning_users -= 1
+            if _pillow_warning_users == 0:
+                _pillow_warning_context.__exit__(None, None, None)
+                _pillow_warning_context = None
 
 
 @lru_cache(maxsize=1)
@@ -60,7 +86,7 @@ def load_frames(path: str, sample_frames: int = 12) -> list[Frame]:
     if avif_detected and not pillow_avif_codec_available():
         raise ValueError(
             "AVIF image detected, but this Pillow build has no working AVIF codec; "
-            "Pillow>=11.3.0 with AVIF support is required"
+            "Pillow>=13.0.0 with AVIF support is required"
         )
     try:
         sample_limit = max(1, int(sample_frames))
@@ -69,15 +95,14 @@ def load_frames(path: str, sample_frames: int = 12) -> list[Frame]:
     sample_limit = min(sample_limit, max(1, env_int("MODIMG_MAX_SAMPLED_FRAMES", 100)))
     frames: list[Frame] = []
     try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", Image.DecompressionBombWarning)
+        with _pillow_warning_errors():
             try:
                 opened_image = Image.open(path)
             except (OSError, RuntimeError, SyntaxError, ValueError) as exc:
                 if avif_detected:
                     raise ValueError(
                         "failed to decode AVIF image: invalid data or an unavailable AVIF decoder; "
-                        "Pillow>=11.3.0 with AVIF support is required"
+                        "Pillow>=13.0.0 with AVIF support is required"
                     ) from exc
                 raise
             with opened_image as img:
@@ -129,7 +154,7 @@ def load_frames(path: str, sample_frames: int = 12) -> list[Frame]:
                         if avif_detected:
                             raise ValueError(
                                 "failed to decode AVIF image: invalid data or an unavailable AVIF decoder; "
-                                "Pillow>=11.3.0 with AVIF support is required"
+                                "Pillow>=13.0.0 with AVIF support is required"
                             ) from exc
                         raise
                     frames.append(Frame(idx=0, pil=frame_rgb, source_format=source_format))
@@ -139,7 +164,7 @@ def load_frames(path: str, sample_frames: int = 12) -> list[Frame]:
         if avif_detected and isinstance(exc, (OSError, RuntimeError, SyntaxError)):
             raise ValueError(
                 "failed to decode AVIF image: invalid data or an unavailable AVIF decoder; "
-                "Pillow>=11.3.0 with AVIF support is required"
+                "Pillow>=13.0.0 with AVIF support is required"
             ) from exc
         raise
     if not frames:

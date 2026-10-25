@@ -16,6 +16,7 @@ class _VerdictState:
     nudity: float = 0.0
     violence: float = 0.0
     hate: float = 0.0
+    requires_review: bool = False
 
     def bump(self, attr: str, value: float, reason: str, threshold: float) -> None:
         if value >= threshold:
@@ -66,6 +67,7 @@ def _apply_error_policy(results: List[EngineResult], state: _VerdictState) -> Ve
         if policy in ("block", "not_ok", "fail", "fail_closed", "deny"):
             return Verdict(VerdictLabel.BLOCK, max(state.nudity, 0.5), max(state.violence, 0.5), max(state.hate, 0.5), state.reasons)
         if policy not in ("ignore", "open", "allow"):
+            state.requires_review = True
             state.nudity = max(state.nudity, 0.40)
             state.violence = max(state.violence, 0.40)
             state.hate = max(state.hate, 0.40)
@@ -298,7 +300,7 @@ def _final_label(state: _VerdictState) -> VerdictLabel:
     review_t = env_float("FINAL_REVIEW_THRESHOLD", 0.40, min_value=0.0, max_value=1.0)
     if state.nudity >= block_t or state.violence >= block_t or state.hate >= block_t:
         return VerdictLabel.BLOCK
-    if state.nudity >= review_t or state.violence >= review_t or state.hate >= review_t:
+    if state.requires_review or state.nudity >= review_t or state.violence >= review_t or state.hate >= review_t:
         return VerdictLabel.REVIEW
     return VerdictLabel.OK
 

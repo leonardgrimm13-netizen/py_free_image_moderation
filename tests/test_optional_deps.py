@@ -141,7 +141,7 @@ def test_yolo_weapon_model_project_root_relative_path(monkeypatch, tmp_path) -> 
             loaded.append(model_ref)
 
         def predict(self, *args, **kwargs):
-            return []
+            return [types.SimpleNamespace(boxes=types.SimpleNamespace(cls=[], conf=[]))]
 
     monkeypatch.setitem(sys.modules, "ultralytics", types.SimpleNamespace(YOLO=FakeYOLO))
     monkeypatch.setenv("YOLO_WORLD_MODEL", "")

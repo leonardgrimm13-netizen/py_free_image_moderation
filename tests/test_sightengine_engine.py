@@ -141,6 +141,33 @@ def test_sightengine_success_without_moderation_scores_is_error(monkeypatch) -> 
     assert response.closed is True
 
 
+@pytest.mark.parametrize("nudity", [{}, {"none": float("nan")}, {"sexual_activity": True}, {"unknown": 0.9}, {"suggestive_classes": {"test": float("inf")}}])
+def test_sightengine_invalid_advanced_nudity_is_error(monkeypatch, nudity) -> None:
+    monkeypatch.setenv("SIGHTENGINE_USER", "user")
+    monkeypatch.setenv("SIGHTENGINE_SECRET", "secret")
+    response = FakeResponse(200, data={"status": "success", "nudity": nudity})
+    monkeypatch.setitem(sys.modules, "requests", types.SimpleNamespace(post=lambda *args, **kwargs: response))
+
+    result = SightengineEngine().run("dummy.png", _frame())
+
+    assert result.status == EngineStatus.ERROR
+    assert "no recognized moderation scores" in (result.error or "")
+    assert response.closed is True
+
+
+@pytest.mark.parametrize("nudity", [{"none": 0.0}, {"suggestive_classes": {"test": 0.0}}])
+def test_sightengine_valid_zero_advanced_nudity_is_success(monkeypatch, nudity) -> None:
+    monkeypatch.setenv("SIGHTENGINE_USER", "user")
+    monkeypatch.setenv("SIGHTENGINE_SECRET", "secret")
+    response = FakeResponse(200, data={"status": "success", "nudity": nudity})
+    monkeypatch.setitem(sys.modules, "requests", types.SimpleNamespace(post=lambda *args, **kwargs: response))
+
+    result = SightengineEngine().run("dummy.png", _frame())
+
+    assert result.status == EngineStatus.OK
+    assert result.scores == {"nudity_safe": 0.0, "nudity_raw": 0.0, "nudity_partial": 0.0}
+
+
 def test_sightengine_rejects_non_finite_only_scores(monkeypatch) -> None:
     monkeypatch.setenv("SIGHTENGINE_USER", "user")
     monkeypatch.setenv("SIGHTENGINE_SECRET", "secret")

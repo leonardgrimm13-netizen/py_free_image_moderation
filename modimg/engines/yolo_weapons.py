@@ -305,10 +305,12 @@ class YOLOWorldWeaponsEngine(Engine):
         else:
             for fr in use:
                 with fr.pil.convert("RGB") as image:
-                    for result in _results_list(
+                    results = _results_list(
                         _predict(mdl, image, conf=conf, iou=iou, imgsz=imgsz, max_det=max_det, device=device, lock=predict_lock)
-                    ):
-                        _consume_result(result)
+                    )
+                    if len(results) != 1:
+                        raise RuntimeError(f"YOLO weapons returned {len(results)} results for one frame")
+                    _consume_result(results[0])
 
         firearm_any = max(firearm, firearm_real, firearm_toy)
 

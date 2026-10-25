@@ -9,7 +9,6 @@ import math
 import os
 import re
 import tempfile
-import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -17,7 +16,7 @@ from xml.etree.ElementTree import ParseError
 
 from PIL import Image, ImageColor, UnidentifiedImageError
 
-from .frames import validate_image_dimensions
+from .frames import _pillow_warning_errors, validate_image_dimensions
 from .logging_utils import get_logger
 from .utils import env_bool, env_int
 
@@ -343,8 +342,7 @@ def _validate_embedded_image(reference: str, element_name: str, budget: _Embedde
         raise SvgError("SVG rejected: total embedded image bytes exceed limit")
 
     try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", Image.DecompressionBombWarning)
+        with _pillow_warning_errors():
             with Image.open(io.BytesIO(decoded)) as embedded:
                 expected_format = _EMBEDDED_FORMATS[mime_type]
                 if str(embedded.format or "").upper() != expected_format:
@@ -490,8 +488,7 @@ def _normalize_renderer_png(
     if not isinstance(png_bytes, bytes) or not png_bytes.startswith(_PNG_SIGNATURE):
         raise SvgError("SVG renderer produced invalid PNG data")
     try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", Image.DecompressionBombWarning)
+        with _pillow_warning_errors():
             with Image.open(io.BytesIO(png_bytes)) as probe:
                 if str(probe.format or "").upper() != "PNG":
                     raise SvgError("SVG renderer produced a non-PNG image")
@@ -523,8 +520,7 @@ def _normalize_renderer_png(
 
 def _verify_temporary_png(path: str, expected_size: tuple[int, int]) -> None:
     try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", Image.DecompressionBombWarning)
+        with _pillow_warning_errors():
             with Image.open(path) as probe:
                 if str(probe.format or "").upper() != "PNG":
                     raise SvgError("SVG renderer output is not a PNG file")

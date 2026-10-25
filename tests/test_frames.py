@@ -263,7 +263,7 @@ def test_recognized_but_invalid_avif_has_controlled_decode_error(tmp_path) -> No
 
     with pytest.raises(
         ValueError,
-        match=r"failed to decode AVIF image: invalid data.*Pillow>=11\.3\.0 with AVIF support is required",
+        match=r"failed to decode AVIF image: invalid data.*Pillow>=13\.0\.0 with AVIF support is required",
     ):
         load_frames(str(path), sample_frames=1)
 
@@ -274,7 +274,7 @@ def test_recognized_avif_without_runtime_codec_has_actionable_error(monkeypatch,
 
     with pytest.raises(
         ValueError,
-        match=r"AVIF image detected.*Pillow>=11\.3\.0 with AVIF support is required",
+        match=r"AVIF image detected.*Pillow>=13\.0\.0 with AVIF support is required",
     ):
         load_frames(str(path), sample_frames=1)
 
@@ -290,7 +290,7 @@ def test_recognized_avif_decoder_value_error_is_normalized(monkeypatch, tmp_path
 
     with pytest.raises(
         ValueError,
-        match=r"failed to decode AVIF image.*Pillow>=11\.3\.0 with AVIF support is required",
+        match=r"failed to decode AVIF image.*Pillow>=13\.0\.0 with AVIF support is required",
     ):
         load_frames(str(path), sample_frames=1)
 

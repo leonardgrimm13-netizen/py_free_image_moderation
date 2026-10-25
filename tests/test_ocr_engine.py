@@ -4,6 +4,8 @@ import os
 import sys
 import types
 
+import pytest
+
 from PIL import Image
 
 from modimg.engines.ocr import OCREngine
@@ -63,6 +65,25 @@ def test_ocr_pattern_cache_is_scoped_to_each_file(monkeypatch, tmp_path) -> None
 
     assert first_engine._load_patterns()[0].pattern == "first"
     assert second_engine._load_patterns()[0].pattern == "other"
+
+
+@pytest.mark.parametrize("setting,initial,updated", [("OCR_BLOCKLIST_MAX_PATTERNS", "1", "2"), ("OCR_MAX_PATTERN_CHARS", "5", "6")])
+def test_ocr_pattern_cache_updates_when_parser_limits_change(monkeypatch, tmp_path, setting, initial, updated) -> None:
+    blocklist = tmp_path / "ocr.txt"
+    blocklist.write_text("first\nsecond\n", encoding="utf-8")
+    _install_fake_pytesseract(monkeypatch, "second")
+    engine = OCREngine()
+    engine.blocklist_path = str(blocklist)
+    frame = Frame(idx=0, pil=Image.new("RGB", (4, 4)))
+    try:
+        monkeypatch.setenv(setting, initial)
+        assert engine.execute("dummy.png", [frame]).scores["ocr_match"] == 0.0
+        monkeypatch.setenv(setting, updated)
+        assert engine.execute("dummy.png", [frame]).scores["ocr_match"] == 1.0
+        monkeypatch.setenv(setting, initial)
+        assert engine.execute("dummy.png", [frame]).scores["ocr_match"] == 0.0
+    finally:
+        frame.close()
 
 
 def test_ocr_restores_tesseract_command_before_releasing_lock(monkeypatch, tmp_path) -> None:
@@ -127,3 +148,22 @@ def test_ocr_passes_bounded_timeout_and_reports_timeout_as_error(monkeypatch, tm
     assert observed_timeouts == [12.5]
     assert result.status == EngineStatus.ERROR
     assert "ocr timed out" in (result.error or "")
+
+
+def test_ocr_cache_reloads_timestamp_preserving_blocklist_replacement(monkeypatch, tmp_path) -> None:
+    blocklist = tmp_path / "ocr.txt"
+    blocklist.write_text("before\n", encoding="utf-8")
+    _install_fake_pytesseract(monkeypatch, "second")
+    engine = OCREngine()
+    engine.blocklist_path = str(blocklist)
+    frame = Frame(idx=0, pil=Image.new("RGB", (4, 4)))
+    try:
+        assert engine.execute("dummy.png", [frame]).scores["ocr_match"] == 0.0
+        previous = blocklist.stat()
+        replacement = tmp_path / "replacement.txt"
+        replacement.write_text("second\n", encoding="utf-8")
+        os.utime(replacement, ns=(previous.st_atime_ns, previous.st_mtime_ns))
+        replacement.replace(blocklist)
+        assert engine.execute("dummy.png", [frame]).scores["ocr_match"] == 1.0
+    finally:
+        frame.close()

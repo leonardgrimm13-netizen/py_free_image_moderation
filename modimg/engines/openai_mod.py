@@ -485,7 +485,7 @@ class OpenAIModerationEngine(Engine):
                 return cls._CLIENT
             from openai import OpenAI
 
-            cls._CLIENT = OpenAI(timeout=timeout)
+            cls._CLIENT = OpenAI(timeout=timeout, max_retries=0)
             cls._CLIENT_TIMEOUT = timeout
             cls._CLIENT_API_KEY = api_key
             return cls._CLIENT

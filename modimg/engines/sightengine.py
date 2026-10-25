@@ -185,19 +185,24 @@ class SightengineEngine(Engine):
                         _record_score(f"nudity_{kk}", nud[kk])
 
                 if not legacy_schema:
+                    nudity_scores_present = False
+
                     def _num(v: Any) -> float:
+                        nonlocal nudity_scores_present
                         parsed = _finite_number(v)
+                        if parsed is not None:
+                            nudity_scores_present = True
                         return safe_float01(parsed) if parsed is not None else 0.0
 
                     # Intensity classes (docs): sexual_activity, sexual_display, erotica, very_suggestive, suggestive, mildly_suggestive, none
-                    safe = _num(nud.get("none", nud.get("safe", 0.0)))
+                    safe = _num(nud.get("none", nud.get("safe")))
                     raw = max(_num(nud.get("sexual_activity")), _num(nud.get("sexual_display")), _num(nud.get("erotica")))
                     partial_intensity = max(_num(nud.get("very_suggestive")), _num(nud.get("suggestive")), _num(nud.get("mildly_suggestive")))
 
                     # Suggestive classes live under nudity.suggestive_classes.* (nested dicts)
                     sugg_max = 0.0
                     def _walk_max(obj: Any) -> None:
-                        nonlocal sugg_max
+                        nonlocal sugg_max, nudity_scores_present
                         if isinstance(obj, dict):
                             for kk, vv in obj.items():
                                 kl = str(kk).strip().lower()
@@ -205,8 +210,10 @@ class SightengineEngine(Engine):
                                 if kl in {"none", "safe", "neutral", "other", "non_suggestive", "normal", "ok", "no_nudity", "non_nudity", "clothed", "fully_clothed", "covered", "not_nude", "nonnude"}:
                                     continue
                                 val = _finite_number(vv)
-                                if val is not None and val > sugg_max:
-                                    sugg_max = safe_float01(val)
+                                if val is not None:
+                                    nudity_scores_present = True
+                                    if val > sugg_max:
+                                        sugg_max = safe_float01(val)
                                 elif not isinstance(vv, (int, float, bool)):
                                     _walk_max(vv)
                         elif isinstance(obj, (list, tuple)):
@@ -225,9 +232,10 @@ class SightengineEngine(Engine):
                     if safe > 0.0:
                         partial = min(partial, max(0.0, 1.0 - safe))
 
-                    scores["nudity_safe"] = safe
-                    scores["nudity_raw"] = raw
-                    scores["nudity_partial"] = partial
+                    if nudity_scores_present:
+                        scores["nudity_safe"] = safe
+                        scores["nudity_raw"] = raw
+                        scores["nudity_partial"] = partial
 
             # Weapon model: dict with classes + firearm_type + firearm_action (schema can vary slightly)
             wpn = _pick_model("weapon", "weapons")

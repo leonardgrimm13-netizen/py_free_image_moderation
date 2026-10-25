@@ -25,7 +25,7 @@ def configure_logging() -> None:
     _protect_stdout_encoding()
 
     level_name = os.getenv("MODIMG_LOG_LEVEL", "DEBUG" if os.getenv("MODIMG_DEBUG", "0").strip() == "1" else "INFO")
-    level = getattr(logging, level_name.upper(), logging.INFO)
+    level = logging.getLevelNamesMapping().get(level_name.upper(), logging.INFO)
 
     handler = logging.StreamHandler(sys.stdout)
     fmt = "%(asctime)s %(levelname)s %(name)s: %(message)s" if level <= logging.DEBUG else "%(message)s"

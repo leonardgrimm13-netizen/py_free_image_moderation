@@ -5,11 +5,17 @@ import math
 import os
 import re
 import threading
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Iterator
 
 import numpy as np
 from PIL import Image
+
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
 
 from .resources import resolve_bundled_resource_path, resolve_resource_path
 from .utils import atomic_write_text, env_int
@@ -22,8 +28,9 @@ except Exception:
     _imagehash = None  # type: ignore
 
 _PHASH_DCT_CACHE: Dict[int, np.ndarray] = {}
-_PHASH_LIST_CACHE: Dict[str, Tuple[tuple[int, int], List[Tuple[str, str, int, int]]]] = {}
-_PHASH_EXACT_CACHE: Dict[str, Tuple[tuple[int, int], Dict[int, Dict[int, Tuple[str, str]]]]] = {}
+_ListSignature = tuple[tuple[int, int, int, int, int], str, int, int, int]
+_PHASH_LIST_CACHE: Dict[str, Tuple[_ListSignature, List[Tuple[str, str, int, int]]]] = {}
+_PHASH_EXACT_CACHE: Dict[str, Tuple[_ListSignature, Dict[int, Dict[int, Tuple[str, str]]]]] = {}
 _PHASH_CACHE_LOCK = threading.RLock()
 _HEX_RE = re.compile(r"^[0-9a-f]+$")
 
@@ -77,6 +84,30 @@ def _phash_cache_invalidate(path: str) -> None:
         _PHASH_LIST_CACHE.pop(p, None)
         _PHASH_EXACT_CACHE.pop(p, None)
 
+
+@contextmanager
+def _phash_file_lock(path: str) -> Iterator[None]:
+    # Keep the sidecar inode stable across atomic list replacements.
+    with open(path + ".lock", "a+b") as lock_file:
+        if os.name == "nt":
+            lock_file.seek(0)
+            if not lock_file.read(1):
+                lock_file.write(b"\0")
+                lock_file.flush()
+            lock_file.seek(0)
+            msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if os.name == "nt":
+                lock_file.seek(0)
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
 def _append_phash_to_list(phash_hex: str, list_path: str, label: str) -> bool:
     list_path = resolve_list_path(list_path)
     phash_hex = (phash_hex or "").strip().lower()
@@ -87,33 +118,34 @@ def _append_phash_to_list(phash_hex: str, list_path: str, label: str) -> bool:
     with _PHASH_CACHE_LOCK:
         try:
             os.makedirs(os.path.dirname(os.path.abspath(list_path)), exist_ok=True)
-            max_bytes = max(1, env_int("PHASH_LIST_MAX_BYTES", 10_000_000))
-            existing: set[str] = set()
-            existing_text = ""
-            if os.path.exists(list_path):
-                if os.path.getsize(list_path) > max_bytes:
+            with _phash_file_lock(list_path):
+                max_bytes = max(1, env_int("PHASH_LIST_MAX_BYTES", 10_000_000))
+                existing: set[str] = set()
+                existing_text = ""
+                if os.path.exists(list_path):
+                    if os.path.getsize(list_path) > max_bytes:
+                        return False
+                    with open(list_path, "rb") as f:
+                        raw = f.read(max_bytes + 1)
+                    if len(raw) > max_bytes:
+                        return False
+                    existing_text = raw.decode("utf-8")
+                    for line in existing_text.splitlines():
+                        line = line.strip()
+                        if not line or line.startswith("#"):
+                            continue
+                        h = line.split(",", 1)[0].strip().lower()
+                        if h:
+                            existing.add(h)
+                if phash_hex in existing:
                     return False
-                with open(list_path, "rb") as f:
-                    raw = f.read(max_bytes + 1)
-                if len(raw) > max_bytes:
+                separator = "" if not existing_text or existing_text.endswith(("\n", "\r")) else "\n"
+                updated_text = f"{existing_text}{separator}{phash_hex},{safe_label}\n"
+                if len(updated_text.encode("utf-8")) > max_bytes:
                     return False
-                existing_text = raw.decode("utf-8")
-                for line in existing_text.splitlines():
-                    line = line.strip()
-                    if not line or line.startswith("#"):
-                        continue
-                    h = line.split(",", 1)[0].strip().lower()
-                    if h:
-                        existing.add(h)
-            if phash_hex in existing:
-                return False
-            separator = "" if not existing_text or existing_text.endswith(("\n", "\r")) else "\n"
-            updated_text = f"{existing_text}{separator}{phash_hex},{safe_label}\n"
-            if len(updated_text.encode("utf-8")) > max_bytes:
-                return False
-            atomic_write_text(list_path, updated_text)
-            _phash_cache_invalidate(list_path)
-            return True
+                atomic_write_text(list_path, updated_text)
+                _phash_cache_invalidate(list_path)
+                return True
         except (OSError, UnicodeError):
             return False
 
@@ -221,12 +253,12 @@ def frame_phash_hex_int(frame: object) -> Tuple[str, int]:
         return str(hx), int(iv)
 
 
-def _file_signature(path: str) -> tuple[int, int] | None:
+def _file_signature(path: str) -> tuple[int, int, int, int, int] | None:
     try:
         stat_result = os.stat(path)
     except OSError:
         return None
-    return stat_result.st_mtime_ns, stat_result.st_size
+    return stat_result.st_mtime_ns, stat_result.st_size, stat_result.st_dev, stat_result.st_ino, stat_result.st_ctime_ns
 
 def load_phash_list(path: str, default_label: str) -> List[Tuple[str, str, int, int]]:
     path = resolve_list_path(path)
@@ -236,13 +268,14 @@ def load_phash_list(path: str, default_label: str) -> List[Tuple[str, str, int, 
     max_bytes = max(1, env_int("PHASH_LIST_MAX_BYTES", 10_000_000))
     if signature[1] > max_bytes:
         return []
-    with _PHASH_CACHE_LOCK:
-        cached = _PHASH_LIST_CACHE.get(path)
-        if cached and cached[0] == signature:
-            return cached[1]
-    out: List[Tuple[str, str, int, int]] = []
     max_entries = max(1, env_int("PHASH_LIST_MAX_ENTRIES", 100_000))
     max_hex_length = max(1, env_int("PHASH_MAX_HEX_LENGTH", 256))
+    cache_signature = (signature, default_label, max_bytes, max_entries, max_hex_length)
+    with _PHASH_CACHE_LOCK:
+        cached = _PHASH_LIST_CACHE.get(path)
+        if cached and cached[0] == cache_signature:
+            return cached[1]
+    out: List[Tuple[str, str, int, int]] = []
     try:
         with open(path, "rb") as f:
             raw = f.read(max_bytes + 1)
@@ -264,7 +297,7 @@ def load_phash_list(path: str, default_label: str) -> List[Tuple[str, str, int, 
     except (OSError, UnicodeError):
         out = []
     with _PHASH_CACHE_LOCK:
-        _PHASH_LIST_CACHE[path] = (signature, out)
+        _PHASH_LIST_CACHE[path] = (cache_signature, out)
     return out
 
 
@@ -274,16 +307,20 @@ def load_phash_exact_map(path: str, default_label: str) -> Dict[int, Dict[int, T
     signature = _file_signature(path)
     if signature is None:
         return {}
+    max_bytes = max(1, env_int("PHASH_LIST_MAX_BYTES", 10_000_000))
+    max_entries = max(1, env_int("PHASH_LIST_MAX_ENTRIES", 100_000))
+    max_hex_length = max(1, env_int("PHASH_MAX_HEX_LENGTH", 256))
+    cache_signature = (signature, default_label, max_bytes, max_entries, max_hex_length)
     with _PHASH_CACHE_LOCK:
         cached = _PHASH_EXACT_CACHE.get(path)
-        if cached and cached[0] == signature:
+        if cached and cached[0] == cache_signature:
             return cached[1]
     mp: Dict[int, Dict[int, Tuple[str, str]]] = {}
     entries = load_phash_list(path, default_label=default_label)
     for hx, label, iv, hlen in entries:
         mp.setdefault(hlen, {})[iv] = (hx, label)
     with _PHASH_CACHE_LOCK:
-        _PHASH_EXACT_CACHE[path] = (signature, mp)
+        _PHASH_EXACT_CACHE[path] = (cache_signature, mp)
     return mp
 
 def best_match_distance(phash_int: int, phash_hex_len: int, entries: List[Tuple[str, str, int, int]], max_distance: int) -> Optional[Tuple[int, str, str]]:

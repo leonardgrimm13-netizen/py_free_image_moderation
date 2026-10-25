@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import socket
 import ssl
 import threading
@@ -406,6 +407,183 @@ def test_request_url_once_bounds_dns_resolution_by_the_request_deadline(monkeypa
     finally:
         release_resolver.set()
         assert resolver_finished.wait(timeout=1)
+
+
+@pytest.mark.parametrize("slow_part", ["headers", "body", "chunked-body", "none"])
+def test_download_deadline_interrupts_slow_trickle_and_closes_resources(monkeypatch, tmp_path, slow_part) -> None:
+    clock = [100.0]
+    timers = []
+    body = b"\x89PNG\r\n\x1a\n" + b"x" * 504
+    if slow_part == "chunked-body":
+        encoded_body = b"100\r\n" + body[:256] + b"\r\n100\r\n" + body[256:] + b"\r\n0\r\n\r\n"
+        headers = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+        slow_after = len(headers) + 5 + 256 + 2
+    else:
+        encoded_body = body
+        headers = b"HTTP/1.1 200 OK\r\nContent-Length: 512\r\nConnection: close\r\n\r\n"
+        slow_after = len(headers) + 256
+    wire = headers + encoded_body
+
+    class Timer:
+        def __init__(self, interval, function) -> None:
+            self.deadline = clock[0] + interval
+            self.function = function
+            self.cancelled = False
+            self.fired = False
+
+        def start(self) -> None:
+            timers.append(self)
+
+        def cancel(self) -> None:
+            self.cancelled = True
+
+    class Reader(io.RawIOBase):
+        offset = 0
+
+        def readable(self) -> bool:
+            return True
+
+        def readinto(self, buffer) -> int:
+            if transport.shut_down or self.offset >= len(wire):
+                return 0
+            if slow_part == "headers" and self.offset < len(headers) or slow_part in {"body", "chunked-body"} and self.offset >= slow_after:
+                clock[0] += 0.01
+                for timer in timers:
+                    if not timer.cancelled and not timer.fired and clock[0] >= timer.deadline:
+                        timer.fired = True
+                        timer.function()
+            if transport.shut_down:
+                return 0
+            buffer[0] = wire[self.offset]
+            self.offset += 1
+            return 1
+
+    class Socket:
+        timeout = 0.0
+        closed = False
+        shut_down = False
+
+        def makefile(self, mode):
+            self.reader = Reader()
+            return io.BufferedReader(self.reader)
+
+        def settimeout(self, value) -> None:
+            self.timeout = value
+
+        def gettimeout(self):
+            return self.timeout
+
+        def sendall(self, data) -> None:
+            return None
+
+        def shutdown(self, how) -> None:
+            self.shut_down = True
+
+        def close(self) -> None:
+            self.closed = True
+
+    transport = Socket()
+    original_temp = utils.tempfile.NamedTemporaryFile
+    monkeypatch.setattr(utils.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(utils.threading, "Timer", Timer)
+    monkeypatch.setattr(utils, "_resolve_url_addresses", lambda *args, **kwargs: [(socket.AF_INET, socket.SOCK_STREAM, 6, ("93.184.216.34", 80))])
+    monkeypatch.setattr(utils, "_connect_resolved", lambda address, timeout: transport)
+    monkeypatch.setattr(utils.tempfile, "NamedTemporaryFile", lambda *args, **kwargs: original_temp(*args, dir=tmp_path, **kwargs))
+
+    if slow_part == "none":
+        path, _ = utils.download_url_to_temp("http://example.test/image.png", timeout_sec=0.15)
+        assert Path(path).read_bytes() == body
+        Path(path).unlink()
+    else:
+        with pytest.raises(TimeoutError):
+            utils.download_url_to_temp("http://example.test/image.png", timeout_sec=0.15)
+        assert clock[0] - 100.0 <= 0.16
+        assert transport.shut_down
+    assert transport.closed
+    assert transport.reader.closed
+    assert timers and all(timer.cancelled for timer in timers)
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("https", [False, True])
+def test_pinned_connect_deducts_connection_and_tls_time_from_socket_deadline(monkeypatch, https) -> None:
+    clock = [100.0]
+
+    class Socket:
+        timeout = None
+
+        def settimeout(self, value) -> None:
+            self.timeout = value
+
+        def close(self) -> None:
+            return None
+
+    raw_socket = Socket()
+    tls_socket = Socket()
+
+    def connect(address, timeout):
+        assert timeout == pytest.approx(1.0)
+        clock[0] += 0.4
+        return raw_socket
+
+    class Context:
+        verify_mode = ssl.CERT_REQUIRED
+        check_hostname = True
+
+        def wrap_socket(self, sock, server_hostname):
+            assert sock is raw_socket
+            assert server_hostname == "example.test"
+            assert sock.timeout == pytest.approx(0.6)
+            clock[0] += 0.2
+            return tls_socket
+
+    monkeypatch.setattr(utils.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(utils, "_connect_resolved", connect)
+    address = (socket.AF_INET, socket.SOCK_STREAM, 6, ("93.184.216.34", 443 if https else 80))
+    if https:
+        connection = utils._PinnedHTTPSConnection("example.test", 443, address, 1.0, Context())
+    else:
+        connection = utils._PinnedHTTPConnection("example.test", 80, address, 1.0)
+
+    connection.connect()
+
+    assert connection.sock.timeout == pytest.approx(0.4 if https else 0.6)
+    connection.close()
+
+
+def test_request_closes_socket_when_deadline_timer_cannot_start(monkeypatch) -> None:
+    class Socket:
+        closed = False
+
+        def makefile(self, mode):
+            self.reader = io.BytesIO(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+            return self.reader
+
+        def settimeout(self, value) -> None:
+            self.timeout = value
+
+        def gettimeout(self):
+            return self.timeout
+
+        def sendall(self, data) -> None:
+            return None
+
+        def close(self) -> None:
+            self.closed = True
+
+    def fail_start(self) -> None:
+        raise RuntimeError("cannot start new thread")
+
+    transport = Socket()
+    monkeypatch.setattr(utils.threading.Timer, "start", fail_start)
+    monkeypatch.setattr(utils, "_resolve_url_addresses", lambda *args, **kwargs: [(socket.AF_INET, socket.SOCK_STREAM, 6, ("93.184.216.34", 80))])
+    monkeypatch.setattr(utils, "_connect_resolved", lambda address, timeout: transport)
+
+    with pytest.raises(RuntimeError, match="cannot start new thread"):
+        utils.download_url_to_temp("http://example.test/image.png")
+
+    assert transport.closed
+    assert transport.reader.closed
 
 
 def test_url_validation_rejects_embedded_credentials() -> None:
