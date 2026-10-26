@@ -1,40 +1,13 @@
 """Raster image frame loading and sampling, including GIF/WebP/AVIF sequences."""
 from __future__ import annotations
 
-from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path
-from threading import Lock
-import warnings
 
 from PIL import Image, features
 
 from .types import Frame
 from .utils import _IMAGE_SNIFF_BYTES, _sniff_image, env_int
-
-
-_pillow_warning_lock = Lock()
-_pillow_warning_users = 0
-_pillow_warning_context = None
-
-
-@contextmanager
-def _pillow_warning_errors():
-    """Keep one global filter scope alive until all concurrent Pillow reads finish."""
-    global _pillow_warning_users, _pillow_warning_context
-    with _pillow_warning_lock:
-        if _pillow_warning_users == 0:
-            _pillow_warning_context = warnings.catch_warnings(action="error", category=Image.DecompressionBombWarning)
-            _pillow_warning_context.__enter__()
-        _pillow_warning_users += 1
-    try:
-        yield
-    finally:
-        with _pillow_warning_lock:
-            _pillow_warning_users -= 1
-            if _pillow_warning_users == 0:
-                _pillow_warning_context.__exit__(None, None, None)
-                _pillow_warning_context = None
 
 
 @lru_cache(maxsize=1)
@@ -62,9 +35,23 @@ def validate_image_dimensions(img: Image.Image) -> int:
     max_pixels = max(1, env_int("MODIMG_MAX_IMAGE_PIXELS", 64_000_000))
     if width <= 0 or height <= 0:
         raise ValueError(f"invalid image dimensions: {width}x{height}")
+    pixels = width * height
+    pillow_limit = Image.MAX_IMAGE_PIXELS
+    if pillow_limit is not None:
+        if pixels > 2 * pillow_limit:
+            raise Image.DecompressionBombError(
+                f"Image size ({pixels} pixels) exceeds limit of {2 * pillow_limit} pixels, "
+                "could be decompression bomb DOS attack."
+            )
+        if pixels > pillow_limit:
+            # Warning filters belong to the caller and may be changed by other
+            # threads. Enforce Pillow's warning threshold without mutating them.
+            raise Image.DecompressionBombWarning(
+                f"Image size ({pixels} pixels) exceeds limit of {pillow_limit} pixels, "
+                "could be decompression bomb DOS attack."
+            )
     if width > max_dimension or height > max_dimension:
         raise ValueError(f"image dimensions exceed limit: {width}x{height} (max dimension {max_dimension})")
-    pixels = width * height
     if pixels > max_pixels:
         raise ValueError(f"image pixel count exceeds limit: {pixels} (limit {max_pixels})")
     return pixels
@@ -95,69 +82,69 @@ def load_frames(path: str, sample_frames: int = 12) -> list[Frame]:
     sample_limit = min(sample_limit, max(1, env_int("MODIMG_MAX_SAMPLED_FRAMES", 100)))
     frames: list[Frame] = []
     try:
-        with _pillow_warning_errors():
-            try:
-                opened_image = Image.open(path)
-            except (OSError, RuntimeError, SyntaxError, ValueError) as exc:
-                if avif_detected:
-                    raise ValueError(
-                        "failed to decode AVIF image: invalid data or an unavailable AVIF decoder; "
-                        "Pillow>=13.0.0 with AVIF support is required"
-                    ) from exc
-                raise
-            with opened_image as img:
-                source_format = str(getattr(img, "format", "") or detected_format).strip().lower()
-                n = int(getattr(img, "n_frames", 1) or 1)
-                is_animated = bool(getattr(img, "is_animated", False)) or n > 1
-                if is_animated:
-                    max_animation_frames = max(1, env_int("MODIMG_MAX_ANIMATION_FRAMES", 5_000))
-                    if n > max_animation_frames:
-                        raise ValueError(f"animation frame count exceeds limit: {n} (limit {max_animation_frames})")
-                    if sample_limit <= 1:
-                        indices = [0]
-                    elif n <= sample_limit:
-                        indices = list(range(n))
-                    else:
-                        positions = [0] + [j * (n - 1) / (sample_limit - 1) for j in range(1, sample_limit - 1)] + [n - 1]
-                        indices = sorted({max(0, min(n - 1, int(round(position)))) for position in positions})
-
-                    max_decoded_pixels = max(1, env_int("MODIMG_MAX_DECODED_PIXELS", 256_000_000))
-                    decoded_pixels = 0
-                    for idx in indices:
-                        try:
-                            img.seek(idx)
-                        except (EOFError, OSError, ValueError) as exc:
-                            raise ValueError(f"failed to decode selected animation frame {idx}") from exc
-                        frame_pixels = validate_image_dimensions(img)
-                        decoded_pixels += frame_pixels
-                        if decoded_pixels > max_decoded_pixels:
-                            raise ValueError(
-                                f"sampled frames exceed decoded-pixel budget: {decoded_pixels} "
-                                f"(limit {max_decoded_pixels})"
-                            )
-                        try:
-                            frame_rgb = img.convert("RGB")
-                        except (OSError, RuntimeError, SyntaxError, ValueError) as exc:
-                            raise ValueError(f"failed to decode selected animation frame {idx}") from exc
-                        frames.append(Frame(idx=idx, pil=frame_rgb, source_format=source_format))
+        try:
+            opened_image = Image.open(path)
+        except (OSError, RuntimeError, SyntaxError, ValueError) as exc:
+            if avif_detected:
+                raise ValueError(
+                    "failed to decode AVIF image: invalid data or an unavailable AVIF decoder; "
+                    "Pillow>=13.0.0 with AVIF support is required"
+                ) from exc
+            raise
+        with opened_image as img:
+            validate_image_dimensions(img)
+            source_format = str(getattr(img, "format", "") or detected_format).strip().lower()
+            n = int(getattr(img, "n_frames", 1) or 1)
+            is_animated = bool(getattr(img, "is_animated", False)) or n > 1
+            if is_animated:
+                max_animation_frames = max(1, env_int("MODIMG_MAX_ANIMATION_FRAMES", 5_000))
+                if n > max_animation_frames:
+                    raise ValueError(f"animation frame count exceeds limit: {n} (limit {max_animation_frames})")
+                if sample_limit <= 1:
+                    indices = [0]
+                elif n <= sample_limit:
+                    indices = list(range(n))
                 else:
-                    pixels_per_frame = validate_image_dimensions(img)
-                    max_decoded_pixels = max(1, env_int("MODIMG_MAX_DECODED_PIXELS", 256_000_000))
-                    if pixels_per_frame > max_decoded_pixels:
+                    positions = [0] + [j * (n - 1) / (sample_limit - 1) for j in range(1, sample_limit - 1)] + [n - 1]
+                    indices = sorted({max(0, min(n - 1, int(round(position)))) for position in positions})
+
+                max_decoded_pixels = max(1, env_int("MODIMG_MAX_DECODED_PIXELS", 256_000_000))
+                decoded_pixels = 0
+                for idx in indices:
+                    try:
+                        img.seek(idx)
+                    except (EOFError, OSError, ValueError) as exc:
+                        raise ValueError(f"failed to decode selected animation frame {idx}") from exc
+                    frame_pixels = validate_image_dimensions(img)
+                    decoded_pixels += frame_pixels
+                    if decoded_pixels > max_decoded_pixels:
                         raise ValueError(
-                            f"decoded image exceeds decoded-pixel budget: {pixels_per_frame} "
+                            f"sampled frames exceed decoded-pixel budget: {decoded_pixels} "
                             f"(limit {max_decoded_pixels})"
                         )
                     try:
                         frame_rgb = img.convert("RGB")
                     except (OSError, RuntimeError, SyntaxError, ValueError) as exc:
-                        if avif_detected:
-                            raise ValueError(
-                                "failed to decode AVIF image: invalid data or an unavailable AVIF decoder; "
-                                "Pillow>=13.0.0 with AVIF support is required"
-                            ) from exc
-                        raise
-                    frames.append(Frame(idx=0, pil=frame_rgb, source_format=source_format))
+                        raise ValueError(f"failed to decode selected animation frame {idx}") from exc
+                    frames.append(Frame(idx=idx, pil=frame_rgb, source_format=source_format))
+            else:
+                pixels_per_frame = validate_image_dimensions(img)
+                max_decoded_pixels = max(1, env_int("MODIMG_MAX_DECODED_PIXELS", 256_000_000))
+                if pixels_per_frame > max_decoded_pixels:
+                    raise ValueError(
+                        f"decoded image exceeds decoded-pixel budget: {pixels_per_frame} "
+                        f"(limit {max_decoded_pixels})"
+                    )
+                try:
+                    frame_rgb = img.convert("RGB")
+                except (OSError, RuntimeError, SyntaxError, ValueError) as exc:
+                    if avif_detected:
+                        raise ValueError(
+                            "failed to decode AVIF image: invalid data or an unavailable AVIF decoder; "
+                            "Pillow>=13.0.0 with AVIF support is required"
+                        ) from exc
+                    raise
+                frames.append(Frame(idx=0, pil=frame_rgb, source_format=source_format))
     except BaseException as exc:
         for frame in frames:
             frame.pil.close()

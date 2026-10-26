@@ -192,7 +192,19 @@ def _apply_yolo_weapons(r: EngineResult, state: _VerdictState) -> None:
 def _apply_sightengine(r: EngineResult, state: _VerdictState) -> None:
     if r.name != "Sightengine":
         return
-    s = r.scores or {}
+    per_frame = (r.details or {}).get("per_frame")
+    if isinstance(per_frame, list) and per_frame and all(
+        isinstance(frame, dict) and isinstance(frame.get("scores"), dict) for frame in per_frame
+    ):
+        # Safe nudity and toy/gesture/animated firearm scores mitigate only
+        # their own frame. Summary maxima can combine unrelated frames.
+        for frame in per_frame:
+            _apply_sightengine_scores(frame["scores"], state)
+    else:
+        _apply_sightengine_scores(r.scores or {}, state)
+
+
+def _apply_sightengine_scores(s: dict[str, Any], state: _VerdictState) -> None:
     raw = safe_float01(s.get("nudity_raw", 0.0))
     partial = safe_float01(s.get("nudity_partial", 0.0))
     safe = safe_float01(s.get("nudity_safe", 0.0))

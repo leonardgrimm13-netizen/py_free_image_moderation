@@ -352,6 +352,13 @@ python -m pip install -r requirements_dev.txt
 pytest -q
 ```
 
+CI tests Python 3.11/3.12 on Linux, Windows, and macOS. A separate regular Ubuntu job runs the bundled ONNX model with CPU dependencies and blocked network access; packaging checks build and install the wheel outside the checkout. The ONNX check verifies loading, inference, class metadata, and JSON serialization, not detection quality. To run it locally after installing `.[local,dev]`:
+
+```bash
+# Bash; in PowerShell set $env:RUN_REAL_MODEL_SMOKE="1" first.
+RUN_REAL_MODEL_SMOKE=1 python -m pytest -q tests/test_forbidden_symbols_yolo_real.py
+```
+
 Local/Vision install smoke test:
 ```bash
 python -m pip install -r requirements_local.txt
@@ -554,7 +561,9 @@ No detections is a successful `OK` engine result with an empty list and zero det
 - URL downloads are streamed with a total timeout, redirect limit, byte limit, format signature check, and guaranteed cleanup of partial temporary files. Query values and URL credentials are removed from reports and errors.
 - Pillow decode limits cap dimensions, pixels, animation frame counts, sampled frames, and aggregate decoded pixels, including native AVIF sequences. A selected animation frame that cannot be decoded fails the loader instead of being silently skipped.
 - pHash lists and the OpenAI cache use bounded reads and atomic replacement. In-process locks serialize cache/list writes and cached model inference.
-- pHash appends also serialize across processes using a tiny persistent `.lock` sidecar beside each list; keep this file in place so concurrent writers share the same lock.
+- pHash appends serialize threads and processes using a persistent `.lock` sidecar beside each list. Windows locks a byte range without touching locked data; Linux/macOS use `flock`. Lock acquisition retries transient contention for at most 10 seconds; acquisition failure leaves the list untouched. Keep the sidecar in place so writers share the same lock.
+- Pillow pixel limits are checked explicitly for raster frames, embedded SVG images, and renderer output, independently of warning filters in other threads. The loader does not change global warning settings.
+- Supported installs use ImageHash/SciPy-compatible pHashes. The emergency NumPy-only fallback can differ at floating-point median ties when these required dependencies are missing; restore core dependencies before maintaining existing lists. No stored list is migrated automatically.
 - Bundled model defaults are resolved only from source-package and installation roots; the current directory is never an automatic fallback. Explicitly configured relative resource paths resolve from the current directory first, followed by source-package and installation fallbacks. Treat every custom `.pt` file as trusted executable model data.
 - OCR blocklists treat ordinary lines as literal text. Prefix a deliberate regular expression with `re:`.
 

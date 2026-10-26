@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import math
 import threading
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
@@ -227,11 +228,11 @@ class YOLOWorldWeaponsEngine(Engine):
             nonlocal firearm, firearm_real, firearm_toy, knife, knife_danger
             boxes = getattr(r0, "boxes", None)
             if boxes is None:
-                return
+                raise RuntimeError("YOLO weapons returned a detection result without boxes")
             cls_ids = getattr(boxes, "cls", None)
             confs = getattr(boxes, "conf", None)
             if cls_ids is None or confs is None:
-                return
+                raise RuntimeError("YOLO weapons returned missing detection arrays")
             try:
                 cls_list = cls_ids.tolist()
                 conf_list = confs.tolist()
@@ -245,8 +246,15 @@ class YOLOWorldWeaponsEngine(Engine):
                     f"{len(cls_list)} classes for {len(conf_list)} confidences"
                 )
             for cid, cprob in zip(cls_list, conf_list, strict=True):
-                nm = _name_for(int(cid)).lower()
-                p = safe_float01(cprob)
+                cid_value = float(cid)
+                if isinstance(cid, bool) or not math.isfinite(cid_value) or not cid_value.is_integer() or cid_value < 0:
+                    raise RuntimeError(f"YOLO weapons returned invalid class ID: {cid!r}")
+                nm = _name_for(int(cid_value)).lower()
+                if not nm:
+                    raise RuntimeError(f"YOLO weapons returned unknown class ID: {cid!r}")
+                p = float(cprob)
+                if isinstance(cprob, bool) or not math.isfinite(p) or not 0.0 <= p <= 1.0:
+                    raise RuntimeError(f"YOLO weapons returned invalid confidence: {cprob!r}")
                 firearm_like = "firearm" in nm or "gun" in nm or "rifle" in nm or "pistol" in nm
                 toy_firearm = "toy" in nm and firearm_like
                 if firearm_like:

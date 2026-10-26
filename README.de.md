@@ -352,6 +352,13 @@ python -m pip install -r requirements_dev.txt
 pytest -q
 ```
 
+CI prüft Python 3.11/3.12 auf Linux, Windows und macOS. Ein separater regulärer Ubuntu-Job führt das gebündelte ONNX-Modell mit CPU-Abhängigkeiten und gesperrtem Netzwerkzugriff aus; Packaging-Prüfungen bauen und installieren das Wheel außerhalb des Checkouts. Der ONNX-Test prüft Laden, Inferenz, Klassenmetadaten und JSON-Serialisierung, keine Erkennungsqualität. Lokal nach Installation von `.[local,dev]`:
+
+```bash
+# Bash; in PowerShell vorher $env:RUN_REAL_MODEL_SMOKE="1" setzen.
+RUN_REAL_MODEL_SMOKE=1 python -m pytest -q tests/test_forbidden_symbols_yolo_real.py
+```
+
 Local/Vision-Smoke-Test:
 ```bash
 python -m pip install -r requirements_local.txt
@@ -555,7 +562,9 @@ Null Detections sind ein erfolgreiches `OK`-Engine-Ergebnis mit leerer Liste und
 - URL-Downloads werden gestreamt und haben Gesamt-Timeout, Redirect-Limit, Byte-Limit, Formatsignaturprüfung sowie garantierte Bereinigung partieller temporärer Dateien. Query-Werte und URL-Zugangsdaten werden aus Reports und Fehlern entfernt.
 - Pillow-Decode-Limits begrenzen Dimensionen, Pixel, Animationsframes, gesampelte Frames und die Summe dekodierter Pixel, einschließlich nativer AVIF-Sequenzen. Ein ausgewählter, nicht dekodierbarer Animationsframe lässt den Loader fehlschlagen, statt still übersprungen zu werden.
 - pHash-Listen und OpenAI-Cache nutzen begrenzte Lesevorgänge und atomaren Austausch. Prozessinterne Locks serialisieren Cache-/Listen-Schreibzugriffe und Inferenz auf gecachten Modellen.
-- pHash-Anhänge werden auch prozessübergreifend durch eine kleine permanente `.lock`-Datei neben der Liste synchronisiert; die Datei muss bestehen bleiben, damit alle Schreiber dasselbe Lock verwenden.
+- pHash-Anhänge synchronisieren Threads und Prozesse über eine permanente `.lock`-Datei neben der Liste. Windows sperrt einen Bytebereich ohne Zugriff auf gesperrte Daten; Linux/macOS verwenden `flock`. Kurzlebige Sperrkonflikte werden höchstens 10 Sekunden wiederholt; bei fehlgeschlagenem Erwerb bleibt die Liste unverändert. Die Sidecar-Datei muss bestehen bleiben, damit Schreiber dasselbe Lock verwenden.
+- Pillow-Pixellimits werden für Rasterframes, eingebettete SVG-Bilder und Renderer-Ausgaben explizit geprüft, unabhängig von Warning-Filtern fremder Threads. Der Loader verändert keine globalen Warning-Einstellungen.
+- Unterstützte Installationen verwenden ImageHash-/SciPy-kompatible pHashes. Dem NumPy-Notfallpfad können bei fehlenden Pflichtabhängigkeiten durch Fließkomma-Mediangleichstände andere Bits entstehen; vor der Pflege vorhandener Listen die Core-Abhängigkeiten wiederherstellen. Gespeicherte Listen werden nicht automatisch migriert.
 - Gebündelte Modell-Defaults werden ausschließlich aus Quellpaket- und Installationspfaden aufgelöst; das aktuelle Arbeitsverzeichnis ist niemals ein automatischer Fallback. Explizit konfigurierte relative Ressourcenpfade werden zuerst aus dem Arbeitsverzeichnis und danach über Quellpaket- und Installations-Fallbacks aufgelöst. Jede eigene `.pt`-Datei ist als vertrauenswürdige ausführbare Modelldatei zu behandeln.
 - OCR-Blocklisten behandeln normale Zeilen als Literaltext. Bewusste reguläre Ausdrücke erhalten das Präfix `re:`.
 

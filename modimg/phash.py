@@ -1,10 +1,12 @@
 """Perceptual hash helpers + allow/block list management."""
 from __future__ import annotations
 
+import errno
 import math
 import os
 import re
 import threading
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Iterator
@@ -87,17 +89,25 @@ def _phash_cache_invalidate(path: str) -> None:
 
 @contextmanager
 def _phash_file_lock(path: str) -> Iterator[None]:
-    # Keep the sidecar inode stable across atomic list replacements.
+    # Keep the sidecar inode stable across atomic list replacements. Windows
+    # permits locking past EOF: do not read/write bytes another handle may own.
     with open(path + ".lock", "a+b") as lock_file:
-        if os.name == "nt":
-            lock_file.seek(0)
-            if not lock_file.read(1):
-                lock_file.write(b"\0")
-                lock_file.flush()
-            lock_file.seek(0)
-            msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
-        else:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        deadline = time.monotonic() + 10.0
+        while True:
+            try:
+                if os.name == "nt":
+                    lock_file.seek(0)
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError as exc:
+                if exc.errno not in {errno.EACCES, errno.EAGAIN, errno.EINTR, errno.EDEADLK}:
+                    raise
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("timed out acquiring pHash list lock") from exc
+                time.sleep(min(0.05, remaining))
         try:
             yield
         finally:
@@ -165,8 +175,8 @@ def _dct_matrix(n: int) -> np.ndarray:
     x = np.arange(n, dtype=np.float64)
     k = x.reshape((n, 1))
     # Match scipy.fftpack.dct(type=2, norm=None), which ImageHash uses.
-    # Its scale is irrelevant to the median comparison, but matching it keeps
-    # fallback hashes identical to the regular ImageHash implementation.
+    # Keep the same coefficient convention. NumPy-only floating-point noise
+    # can still change bits at median ties; the SciPy path avoids that drift.
     mat = 2.0 * np.cos((np.pi * (2.0 * x + 1.0) * k) / (2.0 * n))
     with _PHASH_CACHE_LOCK:
         cached = _PHASH_DCT_CACHE.get(n)

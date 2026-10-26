@@ -124,3 +124,48 @@ def test_on_review_api_policy_runs_after_core_error_with_raised_review_threshold
     assert report["verdict"].label == VerdictLabel.BLOCK
     assert report["verdict"].violence_risk == 0.95
     assert [result.name for result in report["results"]] == ["OCR text", "OpenNSFW2", "OpenAI Moderation"]
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize(
+    "safe_scores,risky_scores,expected_label",
+    [
+        ({"nudity_safe": 1.0, "nudity_partial": 0.0}, {"nudity_safe": 0.0, "nudity_partial": 0.8}, VerdictLabel.REVIEW),
+        ({"weapon_firearm": 0.9, "weapon_firearm_toy": 0.9}, {"weapon_firearm": 0.9, "weapon_firearm_toy": 0.0}, VerdictLabel.BLOCK),
+        ({"weapon_firearm": 0.9, "weapon_firearm_gesture": 0.9}, {"weapon_firearm": 0.9, "weapon_firearm_gesture": 0.0}, VerdictLabel.BLOCK),
+        ({"weapon_firearm": 0.9, "weapon_firearm_type_animated": 0.9}, {"weapon_firearm": 0.9, "weapon_firearm_type_animated": 0.0}, VerdictLabel.BLOCK),
+    ],
+)
+def test_sightengine_mitigating_scores_apply_only_to_their_own_frame(monkeypatch, safe_scores, risky_scores, expected_label, reverse) -> None:
+    monkeypatch.setenv("SE_BLOCK_ANY_FIREARM", "0")
+    frame_scores = [safe_scores, risky_scores] if not reverse else [risky_scores, safe_scores]
+    # The summary contains maxima from different frames, as emitted by the engine.
+    summary = dict(safe_scores)
+    for key, value in risky_scores.items():
+        summary[key] = max(summary.get(key, 0.0), value)
+    result = EngineResult(
+        name="Sightengine",
+        status=EngineStatus.OK,
+        scores=summary,
+        details={"per_frame": [{"frame": idx, "scores": scores} for idx, scores in enumerate(frame_scores)]},
+    )
+
+    verdict = compute_verdict([result])
+
+    assert verdict.label == expected_label
+
+
+@pytest.mark.parametrize(
+    "scores",
+    [
+        {"nudity_safe": 1.0, "nudity_partial": 0.8},
+        {"weapon_firearm": 0.9, "weapon_firearm_toy": 0.9},
+        {"weapon_firearm": 0.9, "weapon_firearm_gesture": 0.9},
+        {"weapon_firearm": 0.9, "weapon_firearm_type_animated": 0.9},
+    ],
+)
+def test_sightengine_same_frame_mitigations_remain_effective(monkeypatch, scores) -> None:
+    monkeypatch.setenv("SE_BLOCK_ANY_FIREARM", "0")
+    result = EngineResult(name="Sightengine", status=EngineStatus.OK, scores=scores, details={"per_frame": [{"frame": 0, "scores": scores}]})
+
+    assert compute_verdict([result]).label == VerdictLabel.OK

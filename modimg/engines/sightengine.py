@@ -148,19 +148,31 @@ class SightengineEngine(Engine):
 
         def _extract_scores(data: Dict[str, Any]) -> Dict[str, float]:
             scores: Dict[str, float] = {}
+            missing = object()
+            metadata_keys = {"id", "request_id", "model", "model_version", "version", "status", "type", "metadata"}
 
             def _finite_number(value: Any) -> float | None:
                 # ``bool`` is an ``int`` subclass in Python but is not a
                 # valid probability from the external API.
                 if isinstance(value, bool) or not isinstance(value, (int, float)):
                     return None
-                parsed = float(value)
+                try:
+                    parsed = float(value)
+                except (OverflowError, ValueError):
+                    return None
                 return parsed if math.isfinite(parsed) else None
 
-            def _record_score(key: str, value: Any) -> float | None:
+            def _probability(value: Any) -> float:
                 parsed = _finite_number(value)
-                if parsed is not None:
-                    scores[key] = parsed
+                if parsed is None or not 0.0 <= parsed <= 1.0:
+                    raise ValueError("Sightengine returned an invalid moderation probability; expected a finite number in [0, 1]")
+                return parsed
+
+            def _record_score(key: str, value: Any) -> float | None:
+                if value is missing:
+                    return None
+                parsed = _probability(value)
+                scores[key] = parsed
                 return parsed
 
             # Total operations used (Sightengine sometimes counts per-model operations)
@@ -172,147 +184,117 @@ class SightengineEngine(Engine):
             def _pick_model(*names: str) -> Any:
                 for n in names:
                     if n in data:
-                        return data.get(n)
-                return None
+                        return data[n]
+                return missing
 
-            # Nudity: supports both legacy schema (raw/partial/safe) and advanced nudity-2.1 (intensity + suggestive classes)
+            def _score_mapping(value: Any, prefix: str) -> None:
+                if value is missing:
+                    return
+                if not isinstance(value, dict):
+                    raise ValueError("Sightengine returned an invalid moderation score container; expected an object")
+                for key, probability in value.items():
+                    if key not in metadata_keys:
+                        _record_score(f"{prefix}_{key}", probability)
+
+            # Legacy and advanced nudity fields can coexist. Evaluate both
+            # families before combining risk so neither silently hides the other.
             nud = _pick_model("nudity", "nudity-2.1", "nudity_2_1")
-            if isinstance(nud, dict):
-                legacy_schema = False
-                for kk in ("raw", "partial", "safe"):
-                    if kk in nud:
-                        legacy_schema = True
-                        _record_score(f"nudity_{kk}", nud[kk])
+            if nud is not missing:
+                if not isinstance(nud, dict):
+                    raise ValueError("Sightengine returned an invalid nudity model; expected an object")
+                legacy_present = any(key in nud for key in ("raw", "partial", "safe"))
+                for key in ("raw", "partial", "safe"):
+                    _record_score(f"nudity_{key}", nud.get(key, missing))
 
-                if not legacy_schema:
-                    nudity_scores_present = False
+                advanced_present = False
 
-                    def _num(v: Any) -> float:
-                        nonlocal nudity_scores_present
-                        parsed = _finite_number(v)
-                        if parsed is not None:
-                            nudity_scores_present = True
-                        return safe_float01(parsed) if parsed is not None else 0.0
+                def _num(value: Any) -> float:
+                    nonlocal advanced_present
+                    if value is missing:
+                        return 0.0
+                    parsed = _probability(value)
+                    advanced_present = True
+                    return parsed
 
-                    # Intensity classes (docs): sexual_activity, sexual_display, erotica, very_suggestive, suggestive, mildly_suggestive, none
-                    safe = _num(nud.get("none", nud.get("safe")))
-                    raw = max(_num(nud.get("sexual_activity")), _num(nud.get("sexual_display")), _num(nud.get("erotica")))
-                    partial_intensity = max(_num(nud.get("very_suggestive")), _num(nud.get("suggestive")), _num(nud.get("mildly_suggestive")))
+                safe = _num(nud.get("none", missing))
+                raw = max(_num(nud.get(key, missing)) for key in ("sexual_activity", "sexual_display", "erotica"))
+                partial = max(_num(nud.get(key, missing)) for key in ("very_suggestive", "suggestive", "mildly_suggestive"))
 
-                    # Suggestive classes live under nudity.suggestive_classes.* (nested dicts)
-                    sugg_max = 0.0
-                    def _walk_max(obj: Any) -> None:
-                        nonlocal sugg_max, nudity_scores_present
-                        if isinstance(obj, dict):
-                            for kk, vv in obj.items():
-                                kl = str(kk).strip().lower()
-                                # Skip safe/non-suggestive labels often present in nested structures
-                                if kl in {"none", "safe", "neutral", "other", "non_suggestive", "normal", "ok", "no_nudity", "non_nudity", "clothed", "fully_clothed", "covered", "not_nude", "nonnude"}:
-                                    continue
-                                val = _finite_number(vv)
-                                if val is not None:
-                                    nudity_scores_present = True
-                                    if val > sugg_max:
-                                        sugg_max = safe_float01(val)
-                                elif not isinstance(vv, (int, float, bool)):
-                                    _walk_max(vv)
-                        elif isinstance(obj, (list, tuple)):
-                            for vv in obj:
-                                _walk_max(vv)
+                suggestive_max = 0.0
+                safe_labels = {"none", "safe", "neutral", "other", "non_suggestive", "normal", "ok", "no_nudity", "non_nudity", "clothed", "fully_clothed", "covered", "not_nude", "nonnude"}
 
-                    _walk_max(nud.get("suggestive_classes"))
+                def _walk_max(obj: Any, include_risk: bool = True) -> None:
+                    nonlocal suggestive_max, advanced_present
+                    if isinstance(obj, dict):
+                        for key, value in obj.items():
+                            label = str(key).strip().lower()
+                            if label not in metadata_keys:
+                                _walk_max(value, include_risk and label not in safe_labels)
+                    elif isinstance(obj, (list, tuple)):
+                        for value in obj:
+                            _walk_max(value, include_risk)
+                    else:
+                        probability = _probability(obj)
+                        advanced_present = True
+                        if include_risk:
+                            suggestive_max = max(suggestive_max, probability)
 
-                    partial = max(partial_intensity, sugg_max)
+                suggestive = nud.get("suggestive_classes", missing)
+                if suggestive is not missing:
+                    if not isinstance(suggestive, (dict, list, tuple)):
+                        raise ValueError("Sightengine returned an invalid suggestive_classes container")
+                    _walk_max(suggestive)
+                partial = max(partial, suggestive_max)
+                if safe > 0.0:
+                    partial = min(partial, max(0.0, 1.0 - safe))
 
-                    # Clamp to [0,1] just in case
-                    safe = max(0.0, min(1.0, safe))
-                    raw = max(0.0, min(1.0, raw))
-                    partial = max(0.0, min(1.0, partial))
-                    # If 'safe/none' is high, partial should be low. Cap it to (1-safe) to avoid false positives.
-                    if safe > 0.0:
-                        partial = min(partial, max(0.0, 1.0 - safe))
+                if advanced_present:
+                    if legacy_present:
+                        legacy_safe = scores.get("nudity_safe", 0.0)
+                        legacy_partial = scores.get("nudity_partial", 0.0)
+                        if legacy_safe > 0.0:
+                            legacy_partial = min(legacy_partial, max(0.0, 1.0 - legacy_safe))
+                        raw = max(raw, scores.get("nudity_raw", 0.0))
+                        partial = max(partial, legacy_partial)
+                        safe = min(safe, legacy_safe)
+                    scores.update(nudity_safe=safe, nudity_raw=raw, nudity_partial=partial)
 
-                    if nudity_scores_present:
-                        scores["nudity_safe"] = safe
-                        scores["nudity_raw"] = raw
-                        scores["nudity_partial"] = partial
-
-            # Weapon model: dict with classes + firearm_type + firearm_action (schema can vary slightly)
+            # Weapon scores support nested class/type/action mappings and flat
+            # probabilities. Explicit nulls or malformed containers are errors.
             wpn = _pick_model("weapon", "weapons")
-            if isinstance(wpn, dict):
-                # common schema: weapon.classes.*
-                classes = wpn.get("classes")
-                if isinstance(classes, dict):
-                    for kk, vv in classes.items():
-                        _record_score(f"weapon_{kk}", vv)
-
-                # some responses put scores directly under weapon.*
-                for kk in ("firearm", "knife", "firearm_toy", "firearm_gesture"):
-                    vv = wpn.get(kk)
-                    _record_score(f"weapon_{kk}", vv)
-
-                ft = wpn.get("firearm_type")
-                if isinstance(ft, dict):
-                    for kk, vv in ft.items():
-                        _record_score(f"weapon_firearm_type_{kk}", vv)
-
-                fa = wpn.get("firearm_action") or wpn.get("firearm_gesture")  # some variants
-                if isinstance(fa, dict):
-                    for kk, vv in fa.items():
-                        _record_score(f"weapon_firearm_action_{kk}", vv)
+            if wpn is not missing:
+                if not isinstance(wpn, dict):
+                    raise ValueError("Sightengine returned an invalid weapon model; expected an object")
+                _score_mapping(wpn.get("classes", missing), "weapon")
+                for key in ("firearm", "knife", "firearm_toy"):
+                    _record_score(f"weapon_{key}", wpn.get(key, missing))
+                _score_mapping(wpn.get("firearm_type", missing), "weapon_firearm_type")
+                _score_mapping(wpn.get("firearm_action", missing), "weapon_firearm_action")
+                gesture = wpn.get("firearm_gesture", missing)
+                if isinstance(gesture, dict):
+                    _score_mapping(gesture, "weapon_firearm_action")
+                else:
+                    _record_score("weapon_firearm_gesture", gesture)
 
             def _parse_prob_classes(model_obj: Any, prefix: str) -> None:
-                if _record_score(f"{prefix}_prob", model_obj) is not None:
-                    # Some older/alternate schemas return a single float
+                if model_obj is missing:
                     return
                 if not isinstance(model_obj, dict):
+                    # Older/alternate schemas return a single probability.
+                    _record_score(f"{prefix}_prob", model_obj)
                     return
-
-                prob = model_obj.get("prob")
-                _record_score(f"{prefix}_prob", prob)
-
-                # Newer schemas: {prefix: {classes: {...}}}
-                classes = model_obj.get("classes")
-                if isinstance(classes, dict):
-                    for kk, vv in classes.items():
-                        _record_score(f"{prefix}_{kk}", vv)
-
-                # Some schemas flatten class scores at the top-level
-                for kk, vv in model_obj.items():
-                    if kk in ("prob", "classes"):
-                        continue
-                    _record_score(f"{prefix}_{kk}", vv)
+                _record_score(f"{prefix}_prob", model_obj.get("prob", missing))
+                _score_mapping(model_obj.get("classes", missing), prefix)
+                for key, value in model_obj.items():
+                    if key not in {"prob", "classes"} | metadata_keys:
+                        _record_score(f"{prefix}_{key}", value)
 
             _parse_prob_classes(_pick_model("gore", "gore-2.0", "gore_2_0"), "gore")
             _parse_prob_classes(_pick_model("violence", "violence-2.0", "violence_2_0"), "violence")
-
-            # Offensive: we also compute a stable offensive_max for downstream logic
-            off = _pick_model("offensive", "offensive-2.0", "offensive_2_0")
-            off_score = _finite_number(off)
-            if off_score is not None:
-                scores["offensive_max"] = off_score
-            elif isinstance(off, dict):
-                _parse_prob_classes(off, "offensive")
-                vals = []
-                prob = off.get("prob")
-                parsed_prob = _finite_number(prob)
-                if parsed_prob is not None:
-                    vals.append(parsed_prob)
-                classes = off.get("classes")
-                if isinstance(classes, dict):
-                    for vv in classes.values():
-                        parsed_value = _finite_number(vv)
-                        if parsed_value is not None:
-                            vals.append(parsed_value)
-                # Fallback: any numeric top-level fields
-                for kk, vv in off.items():
-                    if kk in ("prob", "classes"):
-                        continue
-                    parsed_value = _finite_number(vv)
-                    if parsed_value is not None:
-                        vals.append(parsed_value)
-                if vals:
-                    scores["offensive_max"] = float(max(vals))
+            _parse_prob_classes(_pick_model("offensive", "offensive-2.0", "offensive_2_0"), "offensive")
+            offensive_scores = [value for key, value in scores.items() if key.startswith("offensive_")]
+            if offensive_scores:
+                scores["offensive_max"] = max(offensive_scores)
 
             normalized: Dict[str, float] = {}
             for key, value in scores.items():
@@ -393,7 +375,15 @@ class SightengineEngine(Engine):
                         took_ms=now_ms() - start,
                     )
 
-                sc = _extract_scores(data)
+                try:
+                    sc = _extract_scores(data)
+                except ValueError as exc:
+                    return EngineResult(
+                        name=self.name,
+                        status=EngineStatus.ERROR,
+                        error=str(exc),
+                        took_ms=now_ms() - start,
+                    )
                 if not any(key != "operations_used" for key in sc):
                     return EngineResult(
                         name=self.name,
