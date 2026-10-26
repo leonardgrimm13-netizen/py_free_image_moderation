@@ -87,8 +87,6 @@ jobs:
       CUDA_VISIBLE_DEVICES: "-1"
       YOLO_AUTOINSTALL: "false"
       YOLO_OFFLINE: "true"
-      YOLO_CONFIG_DIR: ${{ runner.temp }}/modimg-ultralytics
-      MPLCONFIGDIR: ${{ runner.temp }}/matplotlib
       OMP_NUM_THREADS: "2"
 
     steps:
@@ -102,6 +100,9 @@ jobs:
           python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
           python -m pip install -e ".[dev]" "ultralytics>=8.4.0,<9" "onnxruntime>=1.19,<2"
       - name: Real forbidden-symbols ONNX smoke
+        env:
+          YOLO_CONFIG_DIR: ${{ runner.temp }}/modimg-ultralytics
+          MPLCONFIGDIR: ${{ runner.temp }}/matplotlib
         run: python -m pytest --override-ini addopts= -q -ra tests/test_forbidden_symbols_yolo_real.py
       - name: Check installed packages
         run: python -m pip check
