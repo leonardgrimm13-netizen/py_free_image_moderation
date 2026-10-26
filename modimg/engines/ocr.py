@@ -15,7 +15,7 @@ class OCREngine(Engine):
     name = "OCR text"
 
     # Cache compiled patterns by file so custom per-instance blocklists cannot collide.
-    _CACHE: dict[str, tuple[tuple[int, int], List[re.Pattern]]] = {}
+    _CACHE: dict[str, tuple[tuple[int, int, int, int, int, int, int], List[re.Pattern]]] = {}
     _CACHE_LOCK = threading.RLock()
     _TESSERACT_CONFIG_LOCK = threading.RLock()
 
@@ -42,7 +42,9 @@ class OCREngine(Engine):
         max_bytes = max(1, env_int("OCR_BLOCKLIST_MAX_BYTES", 1_000_000))
         if stat_result.st_size > max_bytes:
             return []
-        signature = (stat_result.st_mtime_ns, stat_result.st_size)
+        max_patterns = max(1, env_int("OCR_BLOCKLIST_MAX_PATTERNS", 10_000))
+        max_pattern_chars = max(1, env_int("OCR_MAX_PATTERN_CHARS", 1_000))
+        signature = (stat_result.st_mtime_ns, stat_result.st_size, stat_result.st_dev, stat_result.st_ino, stat_result.st_ctime_ns, max_patterns, max_pattern_chars)
         cache_key = str(resolve_resource_path(self.blocklist_path))
         with OCREngine._CACHE_LOCK:
             cached = OCREngine._CACHE.get(cache_key)
@@ -50,8 +52,6 @@ class OCREngine(Engine):
                 return cached[1]
 
         pats: List[re.Pattern] = []
-        max_patterns = max(1, env_int("OCR_BLOCKLIST_MAX_PATTERNS", 10_000))
-        max_pattern_chars = max(1, env_int("OCR_MAX_PATTERN_CHARS", 1_000))
         try:
             with open(self.blocklist_path, "rb") as f:
                 raw = f.read(max_bytes + 1)

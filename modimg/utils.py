@@ -425,16 +425,58 @@ def _connect_resolved(address: tuple[int, int, int, tuple[Any, ...]], timeout: f
         raise
 
 
+def _remaining_timeout(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("URL request timed out")
+    return remaining
+
+
+class _DeadlineHTTPResponse(http.client.HTTPResponse):
+    def __init__(self, sock: socket.socket, *args: Any, **kwargs: Any) -> None:
+        self._deadline_socket = sock
+        self._deadline_timer = threading.Timer(float(sock.gettimeout()), self._abort_download)
+        self._deadline_timer.daemon = True
+        super().__init__(sock, *args, **kwargs)
+        try:
+            self._deadline_timer.start()
+        except BaseException:
+            self.close()
+            raise
+
+    def _abort_download(self) -> None:
+        # HTTPResponse may own the socket after HTTPConnection closes itself.
+        try:
+            self._deadline_socket.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+
+    def close(self) -> None:
+        self._deadline_timer.cancel()
+        super().close()
+
+
 class _PinnedHTTPConnection(http.client.HTTPConnection):
+    response_class = _DeadlineHTTPResponse
+
     def __init__(self, host: str, port: int, address: tuple[int, int, int, tuple[Any, ...]], timeout: float) -> None:
         super().__init__(host, port=port, timeout=timeout)
         self._resolved_address = address
+        self._deadline = time.monotonic() + timeout
 
     def connect(self) -> None:
-        self.sock = _connect_resolved(self._resolved_address, float(self.timeout))
+        self.sock = _connect_resolved(self._resolved_address, _remaining_timeout(self._deadline))
+        try:
+            self.sock.settimeout(_remaining_timeout(self._deadline))
+        except BaseException:
+            self.sock.close()
+            self.sock = None
+            raise
 
 
 class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    response_class = _DeadlineHTTPResponse
+
     def __init__(
         self,
         host: str,
@@ -445,12 +487,18 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
     ) -> None:
         super().__init__(host, port=port, timeout=timeout, context=context)
         self._resolved_address = address
+        self._deadline = time.monotonic() + timeout
 
     def connect(self) -> None:
-        raw_sock = _connect_resolved(self._resolved_address, float(self.timeout))
+        raw_sock = _connect_resolved(self._resolved_address, _remaining_timeout(self._deadline))
         try:
+            raw_sock.settimeout(_remaining_timeout(self._deadline))
             self.sock = self._context.wrap_socket(raw_sock, server_hostname=self.host)
+            self.sock.settimeout(_remaining_timeout(self._deadline))
         except BaseException:
+            if self.sock is not None:
+                self.sock.close()
+                self.sock = None
             raw_sock.close()
             raise
 
@@ -484,10 +532,21 @@ def _request_url_once(
             connection = _PinnedHTTPConnection(host, port, address, remaining)
         try:
             connection.request("GET", path, headers=headers)
-            return connection, connection.getresponse()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("URL request timed out")
+            connection.sock.settimeout(remaining)
+            response = connection.getresponse()
+            if deadline - time.monotonic() <= 0:
+                response.close()
+                raise TimeoutError("URL request timed out")
+            return connection, response
         except (OSError, ssl.SSLError, http.client.HTTPException) as exc:
             last_error = exc
             connection.close()
+        except BaseException:
+            connection.close()
+            raise
     if deadline - time.monotonic() <= 0:
         raise TimeoutError("URL request timed out") from last_error
     raise RuntimeError(f"Could not connect to URL host: {host}") from last_error
@@ -570,7 +629,15 @@ def download_url_to_temp(
                 raise TimeoutError(f"URL download timed out after {timeout:g}s")
             if connection.sock is not None:
                 connection.sock.settimeout(remaining)
-            return response.read(size)
+            try:
+                chunk = response.read(size)
+            except (OSError, http.client.HTTPException) as exc:
+                if deadline - time.monotonic() <= 0:
+                    raise TimeoutError(f"URL download timed out after {timeout:g}s") from exc
+                raise
+            if deadline - time.monotonic() <= 0:
+                raise TimeoutError(f"URL download timed out after {timeout:g}s")
+            return chunk
 
         first_chunk = read_chunk(min(_IMAGE_SNIFF_BYTES, byte_limit + 1))
         if len(first_chunk) > byte_limit:

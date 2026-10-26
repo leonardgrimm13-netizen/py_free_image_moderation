@@ -5,6 +5,7 @@ import time
 import types
 from concurrent.futures import ThreadPoolExecutor
 
+import pytest
 from PIL import Image
 
 from modimg.engines import yolo_weapons
@@ -168,3 +169,48 @@ def test_yolo_weapons_rejects_inconsistent_detection_arrays(monkeypatch) -> None
 
     assert result.status == EngineStatus.ERROR
     assert "inconsistent detection arrays" in (result.error or "")
+
+
+@pytest.mark.parametrize("results", [None, [], [FakeResult(0, 0.1), FakeResult(0, 0.2)]])
+def test_yolo_weapons_rejects_wrong_sequential_result_count(monkeypatch, results) -> None:
+    engine = YOLOWorldWeaponsEngine()
+    monkeypatch.setattr(engine, "available", lambda: (True, ""))
+    monkeypatch.setattr(yolo_weapons, "_resolve_model_reference", lambda: ("fake.pt", True, None))
+    monkeypatch.setattr(yolo_weapons, "_load_model", lambda path: types.SimpleNamespace(names={0: "gun"}, predict=lambda *args, **kwargs: results))
+    frame = Frame(idx=0, pil=Image.new("RGB", (4, 4)))
+    try:
+        result = engine.execute("dummy.png", [frame])
+    finally:
+        frame.close()
+
+    assert result.status == EngineStatus.ERROR
+    assert "results for one frame" in (result.error or "")
+
+
+@pytest.mark.parametrize("boxes", [
+    None,
+    types.SimpleNamespace(),
+    types.SimpleNamespace(cls=[0]),
+    types.SimpleNamespace(cls=[-1], conf=[0.9]),
+    types.SimpleNamespace(cls=[0.5], conf=[0.9]),
+    types.SimpleNamespace(cls=[True], conf=[0.9]),
+    types.SimpleNamespace(cls=[99], conf=[0.9]),
+    types.SimpleNamespace(cls=[0], conf=[True]),
+    types.SimpleNamespace(cls=[0], conf=[float("nan")]),
+    types.SimpleNamespace(cls=[0], conf=[float("inf")]),
+    types.SimpleNamespace(cls=[0], conf=[-0.1]),
+    types.SimpleNamespace(cls=[0], conf=[1.1]),
+])
+def test_yolo_weapons_invalid_detections_are_errors(monkeypatch, boxes) -> None:
+    engine = YOLOWorldWeaponsEngine()
+    monkeypatch.setattr(engine, "available", lambda: (True, ""))
+    monkeypatch.setattr(yolo_weapons, "_resolve_model_reference", lambda: ("fake.pt", True, None))
+    model = types.SimpleNamespace(names={0: "gun", 1: "knife"}, predict=lambda *args, **kwargs: [types.SimpleNamespace(boxes=boxes)])
+    monkeypatch.setattr(yolo_weapons, "_load_model", lambda path: model)
+    frame = Frame(idx=0, pil=Image.new("RGB", (4, 4)))
+    try:
+        result = engine.execute("dummy.png", [frame])
+    finally:
+        frame.close()
+    assert result.status == EngineStatus.ERROR
+    assert result.error

@@ -16,6 +16,7 @@ class _VerdictState:
     nudity: float = 0.0
     violence: float = 0.0
     hate: float = 0.0
+    requires_review: bool = False
 
     def bump(self, attr: str, value: float, reason: str, threshold: float) -> None:
         if value >= threshold:
@@ -66,6 +67,7 @@ def _apply_error_policy(results: List[EngineResult], state: _VerdictState) -> Ve
         if policy in ("block", "not_ok", "fail", "fail_closed", "deny"):
             return Verdict(VerdictLabel.BLOCK, max(state.nudity, 0.5), max(state.violence, 0.5), max(state.hate, 0.5), state.reasons)
         if policy not in ("ignore", "open", "allow"):
+            state.requires_review = True
             state.nudity = max(state.nudity, 0.40)
             state.violence = max(state.violence, 0.40)
             state.hate = max(state.hate, 0.40)
@@ -190,7 +192,19 @@ def _apply_yolo_weapons(r: EngineResult, state: _VerdictState) -> None:
 def _apply_sightengine(r: EngineResult, state: _VerdictState) -> None:
     if r.name != "Sightengine":
         return
-    s = r.scores or {}
+    per_frame = (r.details or {}).get("per_frame")
+    if isinstance(per_frame, list) and per_frame and all(
+        isinstance(frame, dict) and isinstance(frame.get("scores"), dict) for frame in per_frame
+    ):
+        # Safe nudity and toy/gesture/animated firearm scores mitigate only
+        # their own frame. Summary maxima can combine unrelated frames.
+        for frame in per_frame:
+            _apply_sightengine_scores(frame["scores"], state)
+    else:
+        _apply_sightengine_scores(r.scores or {}, state)
+
+
+def _apply_sightengine_scores(s: dict[str, Any], state: _VerdictState) -> None:
     raw = safe_float01(s.get("nudity_raw", 0.0))
     partial = safe_float01(s.get("nudity_partial", 0.0))
     safe = safe_float01(s.get("nudity_safe", 0.0))
@@ -298,7 +312,7 @@ def _final_label(state: _VerdictState) -> VerdictLabel:
     review_t = env_float("FINAL_REVIEW_THRESHOLD", 0.40, min_value=0.0, max_value=1.0)
     if state.nudity >= block_t or state.violence >= block_t or state.hate >= block_t:
         return VerdictLabel.BLOCK
-    if state.nudity >= review_t or state.violence >= review_t or state.hate >= review_t:
+    if state.requires_review or state.nudity >= review_t or state.violence >= review_t or state.hate >= review_t:
         return VerdictLabel.REVIEW
     return VerdictLabel.OK
 

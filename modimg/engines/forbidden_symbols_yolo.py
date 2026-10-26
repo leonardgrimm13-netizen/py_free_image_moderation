@@ -324,6 +324,8 @@ def _normalize_result(result: Any, frame: Frame, image_size: tuple[int, int]) ->
     boxes = getattr(result, "boxes", None)
     if boxes is None:
         raise RuntimeError("forbidden symbols YOLO returned a detection result without boxes")
+    if any(getattr(boxes, field, None) is None for field in ("cls", "conf", "xyxy")):
+        raise RuntimeError("forbidden symbols YOLO returned missing detection arrays")
     class_ids = _tolist(getattr(boxes, "cls", None))
     confidences = _tolist(getattr(boxes, "conf", None))
     xyxy_values = _tolist(getattr(boxes, "xyxy", None))
@@ -338,14 +340,17 @@ def _normalize_result(result: Any, frame: Frame, image_size: tuple[int, int]) ->
     detections: list[dict[str, Any]] = []
     for raw_cid, raw_conf, raw_box in zip(class_ids, confidences, xyxy_values, strict=True):
         cid_value = float(raw_cid)
-        if not math.isfinite(cid_value) or not cid_value.is_integer():
+        if isinstance(raw_cid, bool) or not math.isfinite(cid_value) or not cid_value.is_integer():
             raise RuntimeError(f"forbidden symbols YOLO returned invalid class ID: {raw_cid!r}")
         class_id = int(cid_value)
         if class_id not in FORBIDDEN_SYMBOL_CLASSES:
             raise RuntimeError(f"forbidden symbols YOLO returned unknown class ID {class_id}; expected 0..6")
         confidence = float(raw_conf)
-        values = [float(value) for value in _tolist(raw_box)]
-        if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
+        box_values = _tolist(raw_box)
+        if any(isinstance(value, bool) for value in box_values):
+            raise RuntimeError("forbidden symbols YOLO returned an invalid bounding box")
+        values = [float(value) for value in box_values]
+        if isinstance(raw_conf, bool) or not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
             raise RuntimeError(f"forbidden symbols YOLO returned invalid confidence {confidence!r}; expected a finite value in [0, 1]")
         if len(values) != 4 or not all(math.isfinite(value) for value in values):
             raise RuntimeError("forbidden symbols YOLO returned an invalid bounding box")

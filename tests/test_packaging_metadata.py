@@ -6,7 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CORE_SVG_DEPENDENCIES = {"resvg_py>=0.3,<1.0", "defusedxml>=0.7.1,<1.0"}
-PILLOW_AVIF_REQUIREMENT = "Pillow>=11.3.0"
+PILLOW_AVIF_REQUIREMENT = "Pillow>=13.0.0"
 ULTRALYTICS_REQUIREMENT = "ultralytics>=8.4.0,<9"
 ONNXRUNTIME_REQUIREMENT = "onnxruntime>=1.19,<2"
 FORBIDDEN_SYMBOL_MODELS = {

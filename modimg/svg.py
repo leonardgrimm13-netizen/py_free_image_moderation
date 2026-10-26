@@ -9,7 +9,6 @@ import math
 import os
 import re
 import tempfile
-import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -343,18 +342,16 @@ def _validate_embedded_image(reference: str, element_name: str, budget: _Embedde
         raise SvgError("SVG rejected: total embedded image bytes exceed limit")
 
     try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", Image.DecompressionBombWarning)
-            with Image.open(io.BytesIO(decoded)) as embedded:
-                expected_format = _EMBEDDED_FORMATS[mime_type]
-                if str(embedded.format or "").upper() != expected_format:
-                    raise SvgError("SVG rejected: embedded image MIME type does not match its content")
-                pixels = validate_image_dimensions(embedded)
-                frame_count = int(getattr(embedded, "n_frames", 1) or 1)
-                max_frames = max(1, env_int("MODIMG_MAX_ANIMATION_FRAMES", 5_000))
-                if frame_count > max_frames:
-                    raise SvgError("SVG rejected: embedded animation frame count exceeds limit")
-                embedded.verify()
+        with Image.open(io.BytesIO(decoded)) as embedded:
+            expected_format = _EMBEDDED_FORMATS[mime_type]
+            if str(embedded.format or "").upper() != expected_format:
+                raise SvgError("SVG rejected: embedded image MIME type does not match its content")
+            pixels = validate_image_dimensions(embedded)
+            frame_count = int(getattr(embedded, "n_frames", 1) or 1)
+            max_frames = max(1, env_int("MODIMG_MAX_ANIMATION_FRAMES", 5_000))
+            if frame_count > max_frames:
+                raise SvgError("SVG rejected: embedded animation frame count exceeds limit")
+            embedded.verify()
     except SvgError:
         raise
     except (Image.DecompressionBombError, Image.DecompressionBombWarning, UnidentifiedImageError, OSError, SyntaxError, ValueError) as exc:
@@ -490,28 +487,26 @@ def _normalize_renderer_png(
     if not isinstance(png_bytes, bytes) or not png_bytes.startswith(_PNG_SIGNATURE):
         raise SvgError("SVG renderer produced invalid PNG data")
     try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", Image.DecompressionBombWarning)
-            with Image.open(io.BytesIO(png_bytes)) as probe:
-                if str(probe.format or "").upper() != "PNG":
-                    raise SvgError("SVG renderer produced a non-PNG image")
-                if probe.size != expected_size:
-                    raise SvgError("SVG renderer produced unexpected output dimensions")
-                _validate_rendered_dimensions(probe)
-                probe.verify()
-            with Image.open(io.BytesIO(png_bytes)) as rendered:
-                if rendered.size != expected_size:
-                    raise SvgError("SVG renderer produced unexpected output dimensions")
-                _validate_rendered_dimensions(rendered)
-                rendered.load()
-                with rendered.convert("RGBA") as foreground:
-                    with Image.new("RGBA", rendered.size, (*background_rgb, 255)) as canvas:
-                        canvas.alpha_composite(foreground)
-                        with canvas.convert("RGB") as rgb:
-                            output = io.BytesIO()
-                            rgb.save(output, format="PNG")
-                            normalized = output.getvalue()
-                width, height = rendered.size
+        with Image.open(io.BytesIO(png_bytes)) as probe:
+            if str(probe.format or "").upper() != "PNG":
+                raise SvgError("SVG renderer produced a non-PNG image")
+            if probe.size != expected_size:
+                raise SvgError("SVG renderer produced unexpected output dimensions")
+            _validate_rendered_dimensions(probe)
+            probe.verify()
+        with Image.open(io.BytesIO(png_bytes)) as rendered:
+            if rendered.size != expected_size:
+                raise SvgError("SVG renderer produced unexpected output dimensions")
+            _validate_rendered_dimensions(rendered)
+            rendered.load()
+            with rendered.convert("RGBA") as foreground:
+                with Image.new("RGBA", rendered.size, (*background_rgb, 255)) as canvas:
+                    canvas.alpha_composite(foreground)
+                    with canvas.convert("RGB") as rgb:
+                        output = io.BytesIO()
+                        rgb.save(output, format="PNG")
+                        normalized = output.getvalue()
+            width, height = rendered.size
     except SvgError:
         raise
     except (Image.DecompressionBombError, Image.DecompressionBombWarning, UnidentifiedImageError, OSError, SyntaxError, ValueError) as exc:
@@ -523,20 +518,18 @@ def _normalize_renderer_png(
 
 def _verify_temporary_png(path: str, expected_size: tuple[int, int]) -> None:
     try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", Image.DecompressionBombWarning)
-            with Image.open(path) as probe:
-                if str(probe.format or "").upper() != "PNG":
-                    raise SvgError("SVG renderer output is not a PNG file")
-                if probe.size != expected_size:
-                    raise SvgError("SVG renderer output dimensions changed while writing PNG")
-                _validate_rendered_dimensions(probe)
-                probe.verify()
-            with Image.open(path) as decoded:
-                _validate_rendered_dimensions(decoded)
-                decoded.load()
-                if decoded.mode != "RGB":
-                    raise SvgError("SVG renderer output is not an RGB PNG")
+        with Image.open(path) as probe:
+            if str(probe.format or "").upper() != "PNG":
+                raise SvgError("SVG renderer output is not a PNG file")
+            if probe.size != expected_size:
+                raise SvgError("SVG renderer output dimensions changed while writing PNG")
+            _validate_rendered_dimensions(probe)
+            probe.verify()
+        with Image.open(path) as decoded:
+            _validate_rendered_dimensions(decoded)
+            decoded.load()
+            if decoded.mode != "RGB":
+                raise SvgError("SVG renderer output is not an RGB PNG")
     except SvgError:
         raise
     except (Image.DecompressionBombError, Image.DecompressionBombWarning, UnidentifiedImageError, OSError, SyntaxError, ValueError) as exc:

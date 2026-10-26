@@ -689,3 +689,26 @@ def test_pipeline_order_and_json_compatibility():
     assert [engine.name for engine in build_pre_engines()] == ["pHash blocklist", "pHash allowlist"]
     payload = {"detections": [{"label": "swastika", "bbox_xyxy": [1.0, 2.0, 3.0, 4.0]}]}
     assert json.loads(json.dumps(payload)) == payload
+
+
+@pytest.mark.parametrize("boxes", [
+    types.SimpleNamespace(),
+    types.SimpleNamespace(cls=[], conf=[]),
+    types.SimpleNamespace(cls=[True], conf=[0.9], xyxy=[[1, 2, 10, 20]]),
+    types.SimpleNamespace(cls=[0], conf=[True], xyxy=[[1, 2, 10, 20]]),
+    types.SimpleNamespace(cls=[0], conf=[0.9], xyxy=[[True, 2, 10, 20]]),
+])
+def test_malformed_detection_fields_cannot_be_accepted(monkeypatch, tmp_path, boxes):
+    class MalformedYOLO(FakeYOLO):
+        def predict(self, source, **kwargs):
+            return [types.SimpleNamespace(names=NAMES, boxes=boxes)]
+
+    _install_fake(monkeypatch, tmp_path, fake=MalformedYOLO)
+    frames = _frames()
+    try:
+        result = fs.YOLOForbiddenSymbolsEngine().execute("x", frames)
+    finally:
+        for frame in frames:
+            frame.close()
+    assert result.status == EngineStatus.ERROR
+    assert result.error

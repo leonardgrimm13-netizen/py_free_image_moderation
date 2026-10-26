@@ -104,13 +104,13 @@ python -m pip install -r requirements.txt
 ```
 
 Includes only the lightweight core dependencies:
-- `Pillow>=11.3.0` (including native AVIF decoding)
+- `Pillow>=13.0.0` (security fixes and native AVIF decoding)
 - `numpy`
 - `ImageHash`
 - `resvg_py>=0.3,<1.0` (SVG-to-PNG renderer)
 - `defusedxml>=0.7.1,<1.0` (secure XML pre-validation)
 
-This is enough for raster and AVIF loading, GIF/WebP/AVIF frame sampling, secure SVG preprocessing, pHash allow/block lists, JSON output, and graceful skipping of optional engines. AVIF decoding requires Pillow 11.3.0 or newer with its AVIF codec enabled; SVG support is also part of the core installation, not an optional extra.
+This is enough for raster and AVIF loading, GIF/WebP/AVIF frame sampling, secure SVG preprocessing, pHash allow/block lists, JSON output, and graceful skipping of optional engines. AVIF decoding requires Pillow 13.0.0 or newer with its AVIF codec enabled; SVG support is also part of the core installation, not an optional extra.
 
 #### B) Local/Vision
 ```bash
@@ -272,13 +272,13 @@ AVIF is recognized from a bounded parse of the leading ISO-BMFF `ftyp` box. The 
 
 Local `.avif`, uppercase `.AVIF`, mixed-case suffixes, extensionless files, and AVIF content under an unrelated suffix are supported. Public HTTP(S) URLs are likewise accepted by content even when their path has no extension and their `Content-Type` is absent, generic, or incorrect. URL input continues to use the same DNS-pinned, redirect-validated, SSRF-protected, size-limited downloader. Invalid data advertised as AVIF is rejected, while a valid download is stored temporarily with an `.avif` suffix and removed centrally after processing.
 
-Pillow 11.3.0 or newer decodes AVIF directly into the pipeline's canonical RGB frames. AVIF is not routinely converted to PNG or JPEG. Static images and real multi-frame `avis` sequences have been tested locally; sequences use the same frame-count, sampled-frame, dimension, per-image pixel, and aggregate decoded-pixel limits as GIF and animated WebP input. Selected frames are decoded once and reused by pHash, OCR, both YOLO engines, automatic pHash learning, and all later pipeline stages.
+Pillow 13.0.0 or newer decodes AVIF directly into the pipeline's canonical RGB frames. AVIF is not routinely converted to PNG or JPEG. Static images and real multi-frame `avis` sequences have been tested locally; sequences use the same frame-count, sampled-frame, dimension, per-image pixel, and aggregate decoded-pixel limits as GIF and animated WebP input. Selected frames are decoded once and reused by pHash, OCR, both YOLO engines, automatic pHash learning, and all later pipeline stages.
 
 OpenAI and Sightengine continue to request JPEG bytes from each frame's existing thread-safe cache, so both can share one encoding per frame. NudeNet and OpenNSFW2 are path-based integrations that cannot be assumed to decode AVIF in every backend or subprocess mode. Only when either active engine actually asks for a compatible path does the frame lazily create a fully written temporary JPEG from its already decoded RGB pixels. The same cached bytes and per-frame path are reused across engines and concurrent calls; no AVIF re-decode or duplicate fallback encoding is needed. If neither path engine runs, no compatibility file is created.
 
 Reports retain the original local path or redacted original URL. They can record `source_format: avif`, native decoding, and whether a JPEG engine fallback was actually created, but never expose an internal path. Frame-owned compatibility files and downloaded AVIF files are removed after success, loader or engine errors, exceptions, and early returns.
 
-Pillow builds can theoretically be compiled without the AVIF codec. When AVIF content is detected in such an environment, loading fails in a controlled way with a message that Pillow 11.3.0 or newer with AVIF support is required, instead of leaking a low-level decoder or plugin exception.
+Pillow builds can theoretically be compiled without the AVIF codec. When AVIF content is detected in such an environment, loading fails in a controlled way with a message that Pillow 13.0.0 or newer with AVIF support is required, instead of leaking a low-level decoder or plugin exception.
 
 ---
 
@@ -350,6 +350,13 @@ Dev/test install:
 ```bash
 python -m pip install -r requirements_dev.txt
 pytest -q
+```
+
+CI tests Python 3.11/3.12 on Linux, Windows, and macOS. A separate regular Ubuntu job runs the bundled ONNX model with CPU dependencies and blocked network access; packaging checks build and install the wheel outside the checkout. The ONNX check verifies loading, inference, class metadata, and JSON serialization, not detection quality. To run it locally after installing `.[local,dev]`:
+
+```bash
+# Bash; in PowerShell set $env:RUN_REAL_MODEL_SMOKE="1" first.
+RUN_REAL_MODEL_SMOKE=1 python -m pytest -q tests/test_forbidden_symbols_yolo_real.py
 ```
 
 Local/Vision install smoke test:
@@ -554,6 +561,9 @@ No detections is a successful `OK` engine result with an empty list and zero det
 - URL downloads are streamed with a total timeout, redirect limit, byte limit, format signature check, and guaranteed cleanup of partial temporary files. Query values and URL credentials are removed from reports and errors.
 - Pillow decode limits cap dimensions, pixels, animation frame counts, sampled frames, and aggregate decoded pixels, including native AVIF sequences. A selected animation frame that cannot be decoded fails the loader instead of being silently skipped.
 - pHash lists and the OpenAI cache use bounded reads and atomic replacement. In-process locks serialize cache/list writes and cached model inference.
+- pHash appends serialize threads and processes using a persistent `.lock` sidecar beside each list. Windows locks a byte range without touching locked data; Linux/macOS use `flock`. Lock acquisition retries transient contention for at most 10 seconds; acquisition failure leaves the list untouched. Keep the sidecar in place so writers share the same lock.
+- Pillow pixel limits are checked explicitly for raster frames, embedded SVG images, and renderer output, independently of warning filters in other threads. The loader does not change global warning settings.
+- Supported installs use ImageHash/SciPy-compatible pHashes. The emergency NumPy-only fallback can differ at floating-point median ties when these required dependencies are missing; restore core dependencies before maintaining existing lists. No stored list is migrated automatically.
 - Bundled model defaults are resolved only from source-package and installation roots; the current directory is never an automatic fallback. Explicitly configured relative resource paths resolve from the current directory first, followed by source-package and installation fallbacks. Treat every custom `.pt` file as trusted executable model data.
 - OCR blocklists treat ordinary lines as literal text. Prefix a deliberate regular expression with `re:`.
 
@@ -569,7 +579,7 @@ No detections is a successful `OK` engine result with an empty list and zero det
 ## Troubleshooting
 - `pip install -r requirements.txt` installs nothing or behaves oddly: check that every dependency is on its own line. A damaged requirements file with all dependencies on one line or with dependency lines accidentally commented out is invalid.
 - Unsupported Python version: use Python 3.11 or 3.12. Python 3.13+ may work for some packages, but this project does not promise it and the ML stack may reject it.
-- AVIF codec unavailable: install `Pillow>=11.3.0` using an official wheel or another build with AVIF support. Recognized AVIF input produces a controlled loader error when the active Pillow build lacks a working codec.
+- AVIF codec unavailable: install `Pillow>=13.0.0` using an official wheel or another build with AVIF support. Recognized AVIF input produces a controlled loader error when the active Pillow build lacks a working codec.
 - OpenNSFW2 backend missing: install `requirements_local.txt` or `.[local]`. The project intentionally uses `opennsfw2[tf-keras]`; plain `opennsfw2` can import without having a usable inference backend.
 - OpenNSFW2 native crash: the default is the isolated Python subprocess (`OPENNSFW2_IN_PROCESS=0`) so TensorFlow/native crashes become a controlled engine error instead of killing the CLI. `OPENNSFW2_IN_PROCESS=1` is faster but less robust because native TensorFlow crashes can terminate the whole process. `OPENNSFW2_IN_PROCESS=auto` tries in-process first and falls back once on normal Python exceptions, but cannot recover from native process crashes.
 - TensorFlow/Keras compatibility: keep the local install in a fresh Python 3.11/3.12 venv. If you previously installed Keras/TensorFlow packages manually, recreate the venv and reinstall `requirements_local.txt`.

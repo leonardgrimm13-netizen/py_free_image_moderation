@@ -126,8 +126,9 @@ def test_openai_client_is_reused_until_timeout_or_key_changes(monkeypatch) -> No
     class FakeOpenAI:
         instances: list["FakeOpenAI"] = []
 
-        def __init__(self, timeout):
+        def __init__(self, timeout, **kwargs):
             self.timeout = timeout
+            self.max_retries = kwargs.get("max_retries")
             FakeOpenAI.instances.append(self)
 
     monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=FakeOpenAI))
@@ -139,6 +140,7 @@ def test_openai_client_is_reused_until_timeout_or_key_changes(monkeypatch) -> No
 
     assert first is second
     assert len(FakeOpenAI.instances) == 1
+    assert first.max_retries == 0
 
     third = OpenAIModerationEngine._client_for_timeout(20.0)
     assert third is not first
@@ -148,6 +150,42 @@ def test_openai_client_is_reused_until_timeout_or_key_changes(monkeypatch) -> No
     fourth = OpenAIModerationEngine._client_for_timeout(20.0)
     assert fourth is not third
     assert len(FakeOpenAI.instances) == 3
+
+
+@pytest.mark.parametrize("status_code,policy,expected_calls", [(429, "skip", 1), (429, "retry", 3), (500, "retry", 1)])
+def test_openai_transport_attempts_obey_engine_retry_policy(monkeypatch, status_code, policy, expected_calls) -> None:
+    openai = pytest.importorskip("openai")
+    httpx = getattr(openai._base_client, "httpx2", None) or openai._base_client.httpx
+    calls = []
+
+    def transport(request):
+        calls.append(request)
+        return httpx.Response(
+            status_code,
+            request=request,
+            headers={"retry-after-ms": "1"},
+            json={"error": {"message": "audit failure", "type": "rate_limit_error"}},
+        )
+
+    original_client = openai.OpenAI
+    with httpx.Client(transport=httpx.MockTransport(transport)) as http_client:
+        monkeypatch.setattr(openai, "OpenAI", lambda **kwargs: original_client(http_client=http_client, **kwargs))
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+        monkeypatch.setenv("OPENAI_DISABLE", "0")
+        monkeypatch.setenv("OPENAI_CACHE_ENABLE", "0")
+        monkeypatch.setenv("OPENAI_MIN_INTERVAL_SEC", "0")
+        monkeypatch.setenv("OPENAI_MAX_RETRIES", "4")
+        monkeypatch.setenv("OPENAI_MAX_429_RETRIES", "2")
+        monkeypatch.setenv("OPENAI_429_POLICY", policy)
+        monkeypatch.setenv("OPENAI_BACKOFF_MAX_SEC", "0")
+        frame = Frame(idx=0, pil=Image.new("RGB", (2, 2)))
+        try:
+            result = OpenAIModerationEngine().execute("dummy.png", [frame])
+        finally:
+            frame.close()
+
+    assert len(calls) == expected_calls
+    assert result.status == (EngineStatus.SKIPPED if status_code == 429 else EngineStatus.ERROR)
 
 
 def test_openai_cache_ignores_non_object_root(monkeypatch, tmp_path) -> None:

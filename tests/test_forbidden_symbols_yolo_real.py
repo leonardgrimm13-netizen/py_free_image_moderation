@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,16 @@ def test_bundled_forbidden_symbols_onnx_model_smoke(monkeypatch: pytest.MonkeyPa
     model_path = Path(__file__).resolve().parents[1] / "models" / "forbidden_symbols_yolo26s_CPU_0.1.onnx"
     assert model_path.is_file()
 
+    monkeypatch.setenv("YOLO_OFFLINE", "true")
+    monkeypatch.setenv("YOLO_AUTOINSTALL", "false")
+    network_attempts = []
+
+    def deny_network(*args, **kwargs):
+        network_attempts.append(args)
+        raise AssertionError("bundled ONNX smoke must not access the network")
+
+    monkeypatch.setattr(socket.socket, "connect", deny_network)
+    monkeypatch.setattr(socket.socket, "connect_ex", deny_network)
     monkeypatch.delenv("FORBIDDEN_SYMBOLS_YOLO_MODEL", raising=False)
     monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_BACKEND", "onnx")
     monkeypatch.setenv("FORBIDDEN_SYMBOLS_YOLO_ONNX_MODEL", str(model_path))
@@ -45,3 +56,5 @@ def test_bundled_forbidden_symbols_onnx_model_smoke(monkeypatch: pytest.MonkeyPa
     assert result.details["result_count"] == 1
     assert result.details["detection_count"] == len(result.details["detections"])
     json.dumps(json_safe(result.__dict__), allow_nan=False)
+
+    assert network_attempts == []

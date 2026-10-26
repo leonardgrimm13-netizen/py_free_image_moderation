@@ -6,10 +6,14 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   core:
     name: Core install / Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -28,7 +32,7 @@ jobs:
           python -m pip install -r requirements.txt
 
       - name: Compile
-        run: python -m compileall -q .
+        run: python -m compileall -q modimg tests moderate_image.py
 
       - name: CLI help
         run: python moderate_image.py --help
@@ -39,6 +43,7 @@ jobs:
   test:
     name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -55,13 +60,16 @@ jobs:
       - name: Install dev dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
+          python -m pip install -e ".[api,dev]"
 
       - name: Compile
-        run: python -m compileall -q .
+        run: python -m compileall -q modimg tests moderate_image.py
 
       - name: Test
-        run: pytest -q
+        run: python -m pytest --override-ini addopts= -q -ra
+
+      - name: Lint
+        run: python -m ruff check .
 
       - name: CLI help
         run: python moderate_image.py --help
@@ -69,8 +77,82 @@ jobs:
       - name: Check installed packages
         run: python -m pip check
 
+  onnx-smoke:
+    name: Bundled ONNX / Python 3.12
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RUN_REAL_MODEL_SMOKE: "1"
+      FORBIDDEN_SYMBOLS_YOLO_ENABLE: "1"
+      CUDA_VISIBLE_DEVICES: "-1"
+      YOLO_AUTOINSTALL: "false"
+      YOLO_OFFLINE: "true"
+      OMP_NUM_THREADS: "2"
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install CPU inference dependencies
+        run: |
+          python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -e ".[dev]" "ultralytics>=8.4.0,<9" "onnxruntime>=1.19,<2"
+      - name: Real forbidden-symbols ONNX smoke
+        env:
+          YOLO_CONFIG_DIR: ${{ runner.temp }}/modimg-ultralytics
+          MPLCONFIGDIR: ${{ runner.temp }}/matplotlib
+        run: python -m pytest --override-ini addopts= -q -ra tests/test_forbidden_symbols_yolo_real.py
+      - name: Check installed packages
+        run: python -m pip check
+
+  packaging:
+    name: Wheel and source distribution
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build distributions
+        run: |
+          python -m pip install build
+          python -m build
+      - name: Verify distribution contents
+        run: |
+          python - <<'PYTHON'
+          import hashlib
+          import tarfile
+          import zipfile
+          from pathlib import Path
+
+          resources = [*Path("models").glob("*.pt"), *Path("models").glob("*.onnx"), *Path("data").glob("*.txt")]
+          source_files = [*Path("modimg").rglob("*.py"), *Path("tests").rglob("*.py"), Path("pytest.ini"), Path(".env.example")]
+          with tarfile.open(next(Path("dist").glob("*.tar.gz"))) as source, zipfile.ZipFile(next(Path("dist").glob("*.whl"))) as wheel:
+              source_names = {name.split("/", 1)[1]: name for name in source.getnames() if "/" in name}
+              for path in [*source_files, *resources]:
+                  assert source.extractfile(source_names[path.as_posix()]).read() == path.read_bytes(), path
+              for path in resources:
+                  name = next(name for name in wheel.namelist() if name.endswith("/" + path.as_posix()))
+                  assert hashlib.sha256(wheel.read(name)).digest() == hashlib.sha256(path.read_bytes()).digest(), path
+          PYTHON
+
+      - name: Install wheel outside the checkout
+        run: |
+          python -m venv "${{ runner.temp }}/wheel-env"
+          "${{ runner.temp }}/wheel-env/bin/python" -m pip install dist/*.whl
+      - name: Verify installed resources and CLI
+        working-directory: ${{ runner.temp }}
+        run: |
+          "${{ runner.temp }}/wheel-env/bin/python" -m modimg --help
+          "${{ runner.temp }}/wheel-env/bin/python" -m pip check
+          "${{ runner.temp }}/wheel-env/bin/python" -c "from modimg.resources import resolve_bundled_resource_path as resolve; paths = ('models/forbidden_symbols_yolo26s_GPU_0.1.pt', 'models/forbidden_symbols_yolo26s_CPU_0.1.onnx', 'models/yolov8s-oiv7.pt', 'data/phash_allowlist.txt', 'data/phash_blocklist.txt', 'data/ocr_text_blocklist.txt'); assert all(resolve(p).is_file() for p in paths), paths"
+
   local-extras:
     name: Local extras smoke (manual)
+    timeout-minutes: 25
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     env:
@@ -98,7 +180,7 @@ jobs:
         run: python -c "import onnxruntime, opennsfw2, nudenet, ultralytics, pytesseract"
 
       - name: Compile
-        run: python -m compileall -q .
+        run: python -m compileall -q modimg tests moderate_image.py
 
       - name: Test without heavy inference
         run: pytest -q

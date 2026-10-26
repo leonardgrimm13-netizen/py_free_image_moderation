@@ -224,3 +224,35 @@ def test_frame_phash_cache_is_computed_once_across_threads(monkeypatch) -> None:
 
     assert results == [("0123456789abcdef", 0x0123456789ABCDEF)] * 8
     assert calls == 1
+
+
+def test_numpy_only_phash_matches_imagehash_on_identical_sampled_pixels(monkeypatch) -> None:
+    import builtins
+    import imagehash
+    import numpy as np
+
+    # Isolate DCT compatibility from Pillow's resampling: both implementations
+    # receive exactly the same pixels, already at the requested sample size.
+    rng = np.random.default_rng(39)
+    cases = []
+    for hs, hf in ((3, 2), (4, 4), (8, 4)):
+        size = hs * hf
+        images = [Image.fromarray(rng.integers(0, 256, (size, size, 3), dtype=np.uint8))]
+        images.extend(Image.new("L", (size, size), value) for value in (0, 1, 128, 255))
+        for image in images:
+            cases.append((image, hs, hf, str(imagehash.phash(image, hash_size=hs, highfreq_factor=hf))))
+    real_import = builtins.__import__
+
+    def no_scipy(name, *args, **kwargs):
+        if name == "scipy" or name.startswith("scipy."):
+            raise ImportError("minimal NumPy-only environment")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(phash_module, "_imagehash", None)
+    monkeypatch.setattr(builtins, "__import__", no_scipy)
+    try:
+        for image, hs, hf, expected in cases:
+            assert phash_hex_from_pil(image, hs, hf) == expected
+    finally:
+        for image, *_ in cases:
+            image.close()
